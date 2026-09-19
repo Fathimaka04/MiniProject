@@ -1,0 +1,33 @@
+# GazeAssist - Assistive Communication System
+# Python 3.11
+
+# Perception & Vision
+mediapipe>=0.10.0
+opencv-python>=4.8
+
+# ML Framework
+tensorflow>=2.15,<3.0
+scikit-learn>=1.3
+
+# Data
+numpy
+pandas
+
+# TTS
+edge-tts>=6.1
+pyttsx3
+
+# Alerts
+pywhatkit
+
+# Dashboard
+flask>=3.0
+
+# Charts & Analytics
+matplotlib>=3.7
+
+# Audio
+pygame>=2.5
+
+# Utilities
+asyncio-compat>=0.1; python_version>="3.11"

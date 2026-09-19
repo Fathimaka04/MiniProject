@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GazeAssist — Caregiver Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- SOS Alert Banner -->
+<div id="sos-banner" class="sos-banner hidden">
+    🚨 EMERGENCY SOS ALERT 🚨
+    <button onclick="acknowledgeSOS()">Acknowledge</button>
+</div>
+
+<header>
+    <h1>🖥️ GazeAssist — Caregiver Dashboard</h1>
+    <span id="status-dot" class="status-dot"></span>
+    <span id="session-info">Loading...</span>
+</header>
+
+<main>
+    <!-- Stats Row -->
+    <div class="stats-row">
+        <div class="stat-card">
+            <div class="stat-value" id="stat-duration">--</div>
+            <div class="stat-label">Session Duration</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value" id="stat-messages">0</div>
+            <div class="stat-label">Messages</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value" id="stat-sos">0</div>
+            <div class="stat-label">SOS Events</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value" id="stat-last">--</div>
+            <div class="stat-label">Last Activity</div>
+        </div>
+    </div>
+
+    <div class="grid-2col">
+        <!-- Communication Log -->
+        <div class="panel">
+            <h2>💬 Communication Log</h2>
+            <div class="log-container" id="comm-log">
+                <p class="empty-msg">No messages yet</p>
+            </div>
+        </div>
+
+        <!-- Pain Timeline -->
+        <div class="panel">
+            <h2>📊 Pain Level Timeline</h2>
+            <canvas id="pain-chart" height="200"></canvas>
+        </div>
+    </div>
+
+    <div class="grid-2col">
+        <!-- Most Used Phrases -->
+        <div class="panel">
+            <h2>📈 Most Used Phrases</h2>
+            <canvas id="phrases-chart" height="200"></canvas>
+        </div>
+
+        <!-- SOS Events -->
+        <div class="panel">
+            <h2>🚨 SOS Event Log</h2>
+            <div class="log-container" id="sos-log">
+                <p class="empty-msg">No SOS events</p>
+            </div>
+        </div>
+    </div>
+</main>
+
+<script>
+// Charts
+let painChart = null;
+let phrasesChart = null;
+
+function initCharts() {
+    const painCtx = document.getElementById('pain-chart').getContext('2d');
+    painChart = new Chart(painCtx, {
+        type: 'line',
+        data: { labels: [], datasets: [{ label: 'Pain Level', data: [],
+            borderColor: '#F44336', backgroundColor: 'rgba(244,67,54,0.1)',
+            fill: true, tension: 0.3, pointRadius: 5 }] },
+        options: { scales: { y: { min: 0, max: 10, ticks: { stepSize: 1 } } },
+                   plugins: { legend: { display: false } } }
+    });
+
+    const phrasesCtx = document.getElementById('phrases-chart').getContext('2d');
+    phrasesChart = new Chart(phrasesCtx, {
+        type: 'bar',
+        data: { labels: [], datasets: [{ label: 'Usage Count', data: [],
+            backgroundColor: '#4A90D9' }] },
+        options: { indexAxis: 'y', plugins: { legend: { display: false } } }
+    });
+}
+
+// Polling
+async function poll() {
+    try {
+        const res = await fetch('/api/poll');
+        const data = await res.json();
+        document.getElementById('status-dot').className = 'status-dot active';
+        document.getElementById('session-info').textContent = 'Session Active';
+
+        // SOS banner
+        const banner = document.getElementById('sos-banner');
+        if (data.sos_active) {
+            banner.classList.remove('hidden');
+            document.body.classList.add('sos-active');
+        }
+    } catch(e) {
+        document.getElementById('status-dot').className = 'status-dot';
+        document.getElementById('session-info').textContent = 'Disconnected';
+    }
+}
+
+async function updateSessionLog() {
+    try {
+        const res = await fetch('/api/session-log');
+        const log = await res.json();
+        const container = document.getElementById('comm-log');
+        if (log.length === 0) {
+            container.innerHTML = '<p class="empty-msg">No messages yet</p>';
+            return;
+        }
+        container.innerHTML = log.map(e =>
+            `<div class="log-entry">
+                <span class="log-time">${e.timestamp || ''}</span>
+                <span class="log-cat">${e.category || ''}</span>
+                <span class="log-phrase">${e.phrase}</span>
+            </div>`
+        ).join('');
+        container.scrollTop = container.scrollHeight;
+        document.getElementById('stat-messages').textContent = log.length;
+        if (log.length > 0) {
+            document.getElementById('stat-last').textContent =
+                log[log.length-1].timestamp || '--';
+        }
+    } catch(e) {}
+}
+
+async function updatePainTimeline() {
+    try {
+        const res = await fetch('/api/pain-timeline');
+        const data = await res.json();
+        if (painChart && data.length > 0) {
+            painChart.data.labels = data.map(d => d.timestamp || '');
+            painChart.data.datasets[0].data = data.map(d => d.pain_level);
+            // Color points by pain level
+            painChart.data.datasets[0].pointBackgroundColor = data.map(d => {
+                const colors = ['#4CAF50','#66BB6A','#8BC34A','#CDDC39','#FFEB3B',
+                    '#FFC107','#FF9800','#FF5722','#F44336','#D32F2F'];
+                return colors[Math.min(d.pain_level-1, 9)];
+            });
+            painChart.update();
+        }
+    } catch(e) {}
+}
+
+async function updatePhrases() {
+    try {
+        const res = await fetch('/api/phrases');
+        const data = await res.json();
+        if (phrasesChart && data.length > 0) {
+            phrasesChart.data.labels = data.map(d => d.phrase);
+            phrasesChart.data.datasets[0].data = data.map(d => d.count);
+            phrasesChart.update();
+        }
+    } catch(e) {}
+}
+
+async function updateSOSEvents() {
+    try {
+        const res = await fetch('/api/sos-events');
+        const events = await res.json();
+        const container = document.getElementById('sos-log');
+        document.getElementById('stat-sos').textContent = events.length;
+        if (events.length === 0) {
+            container.innerHTML = '<p class="empty-msg">No SOS events</p>';
+            return;
+        }
+        container.innerHTML = events.map(e =>
+            `<div class="log-entry sos-entry">
+                <span class="log-time">${e.timestamp || ''}</span>
+                <span class="log-phrase">🚨 SOS — ${e.alert_channels_fired || ''}</span>
+            </div>`
+        ).join('');
+    } catch(e) {}
+}
+
+async function updateStats() {
+    try {
+        const res = await fetch('/api/stats');
+        const stats = await res.json();
+        if (stats.duration) {
+            document.getElementById('stat-duration').textContent = stats.duration;
+        }
+    } catch(e) {}
+}
+
+async function acknowledgeSOS() {
+    await fetch('/api/sos-acknowledge', { method: 'POST' });
+    document.getElementById('sos-banner').classList.add('hidden');
+    document.body.classList.remove('sos-active');
+}
+
+// Init
+initCharts();
+setInterval(() => {
+    poll();
+    updateSessionLog();
+    updatePainTimeline();
+    updatePhrases();
+    updateSOSEvents();
+    updateStats();
+}, 3000);
+
+// First load
+poll(); updateSessionLog(); updatePainTimeline(); updatePhrases(); updateSOSEvents(); updateStats();
+</script>
+
+</body>
+</html>
