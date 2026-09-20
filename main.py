@@ -42,7 +42,7 @@ from perception.face_mesh import SharedPerception
 from blink.ear import compute_both_ears
 from blink.classifier import BlinkClassifier
 from blink.enrollment import BlinkEnrollment
-from gaze.features import extract_gaze_features
+from gaze.features import extract_gaze_features, weight_gaze_features
 from gaze.model import GazePredictor
 from gaze.calibration import CalibrationScreen
 from phrase_board.tiles import Tile, get_tile_text

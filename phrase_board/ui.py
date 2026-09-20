@@ -150,6 +150,7 @@ class PhraseBoardUI:
         for w in self._grid_frame.winfo_children():
             w.destroy()
         self._tile_widgets.clear()
+        self._last_highlighted_idx = None
         self._zone_to_tile.clear()
 
         tiles = self._current_tiles
@@ -257,20 +258,35 @@ class PhraseBoardUI:
         return min(idx, n - 1)
 
     def _update_cursor(self, tile_idx: int):
-        """Update the gaze cursor visual indicator."""
-        # Highlight the gazed tile
-        for idx, w in self._tile_widgets.items():
-            if idx == tile_idx:
+        """Update the gaze cursor visual indicator.
+
+        Only touches widget config when the highlighted tile actually
+        changes — reconfiguring the same border 30x/sec even with
+        identical values forces Tk to redraw it every frame, which
+        shows up as visible flicker once gaze prediction is stable.
+        """
+        if tile_idx == getattr(self, "_last_highlighted_idx", None):
+            return  # nothing changed since last frame — skip redraw
+
+        # Clear the previous highlight (unless that tile is armed)
+        prev_idx = getattr(self, "_last_highlighted_idx", None)
+        if prev_idx is not None and prev_idx in self._tile_widgets:
+            w = self._tile_widgets[prev_idx]
+            armed_id = self._armed_tile_id
+            if not (armed_id and w["tile"].id == armed_id):
+                w["frame"].config(highlightthickness=0)
+
+        # Apply the new highlight (unless it's the currently armed tile,
+        # which already has its own highlight from _on_tile_armed)
+        if tile_idx in self._tile_widgets:
+            w = self._tile_widgets[tile_idx]
+            armed_id = self._armed_tile_id
+            if not (armed_id and w["tile"].id == armed_id):
                 w["frame"].config(
                     highlightbackground="#FFD700", highlightthickness=3,
                 )
-            else:
-                armed_id = self._armed_tile_id
-                if armed_id and w["tile"].id == armed_id:
-                    # Keep armed highlight
-                    pass
-                else:
-                    w["frame"].config(highlightthickness=0)
+
+        self._last_highlighted_idx = tile_idx
 
     # ── Confirmer callbacks ───────────────────────────────────────────
 

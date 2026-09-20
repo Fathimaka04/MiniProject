@@ -35,6 +35,30 @@ CANONICAL_3D = np.array([
 RIGHT_EYE_EAR = [33, 160, 158, 133, 153, 144]
 LEFT_EYE_EAR = [263, 387, 385, 362, 380, 373]
 
+# ── Feature-importance weights ───────────────────────────────────────
+# Head-pose (indices 8-10) gets a larger multiplier because pitch/yaw
+# are the most reliable gaze proxy from a standard webcam; iris position
+# (indices 0-7) carries small, noisy pixel differences between adjacent
+# tiles.  EAR (indices 11-12) stays at 1.0 — it's informational, not
+# directional.
+FEATURE_WEIGHTS = np.array([
+    1.0, 1.0, 1.0, 1.0,   # iris normalised position  [0-3]
+    1.0, 1.0, 1.0, 1.0,   # iris-corner dist ratios   [4-7]
+    3.0, 3.0, 2.0,         # pitch, yaw, roll          [8-10]
+    1.0, 1.0,              # EAR (right, left)         [11-12]
+], dtype=np.float64)
+
+
+def weight_gaze_features(features: np.ndarray) -> np.ndarray:
+    """Apply per-feature importance weights before scaling/training.
+
+    Works for both single vectors (13,) and batches (N, 13).
+    Multiplying before StandardScaler is equivalent to scaling the
+    corresponding Ridge coefficients — a standard way to inject domain
+    priors into linear classifiers.
+    """
+    return features * FEATURE_WEIGHTS
+
 
 def _lm_px(landmark, w: int, h: int) -> np.ndarray:
     """Convert a normalised MediaPipe landmark to pixel coords."""

@@ -12,6 +12,8 @@ from typing import Optional
 
 import numpy as np
 
+from gaze.features import weight_gaze_features
+
 try:
     from sklearn.linear_model import RidgeClassifier
     from sklearn.preprocessing import StandardScaler
@@ -66,6 +68,7 @@ class RidgeGazePredictor:
         if not SKLEARN_OK:
             logger.error("scikit-learn not available")
             return
+        features = weight_gaze_features(features)
         X = self._scaler.fit_transform(features)
         self._quad_model.fit(X, quad_labels)
         if zone_labels is not None and len(np.unique(zone_labels)) > 1:
@@ -76,12 +79,14 @@ class RidgeGazePredictor:
     def predict_quadrant(self, features: np.ndarray) -> int:
         if not self._calibrated:
             return int(GazeZone.NONE)
+        features = weight_gaze_features(features)
         X = self._scaler.transform(features.reshape(1, -1))
         return int(self._quad_model.predict(X)[0])
 
     def predict_zone(self, features: np.ndarray) -> int:
         if not self._calibrated:
             return int(GazeZone.NONE)
+        features = weight_gaze_features(features)
         X = self._scaler.transform(features.reshape(1, -1))
         return int(self._zone_model.predict(X)[0])
 
@@ -122,6 +127,7 @@ class MLPGazePredictor:
             logger.error("TensorFlow/sklearn not available for MLP gaze")
             return
 
+        features = weight_gaze_features(features)
         X = self._scaler.fit_transform(features).astype(np.float32)
 
         self._quad_model = self._build_model(N_ZONES)
@@ -137,6 +143,7 @@ class MLPGazePredictor:
     def predict_quadrant(self, features: np.ndarray) -> int:
         if not self._calibrated or self._quad_model is None:
             return int(GazeZone.NONE)
+        features = weight_gaze_features(features)
         X = self._scaler.transform(features.reshape(1, -1)).astype(np.float32)
         probs = self._quad_model.predict(X, verbose=0)[0]
         return int(np.argmax(probs))
@@ -144,6 +151,7 @@ class MLPGazePredictor:
     def predict_zone(self, features: np.ndarray) -> int:
         if not self._calibrated or self._zone_model is None:
             return self.predict_quadrant(features)
+        features = weight_gaze_features(features)
         X = self._scaler.transform(features.reshape(1, -1)).astype(np.float32)
         probs = self._zone_model.predict(X, verbose=0)[0]
         return int(np.argmax(probs))
@@ -165,7 +173,12 @@ class GazePredictor:
 
     def __init__(self):
         self._ridge = RidgeGazePredictor() if SKLEARN_OK else None
-        self._mlp = MLPGazePredictor() if TF_OK and SKLEARN_OK else None
+        # MLP disabled for now: with only ~45-65 calibration samples per
+        # zone (all from one short, near-identical gaze window), the MLP
+        # overfits badly and generalizes poorly to real usage. Ridge is a
+        # simpler linear model that's much more robust with this little
+        # per-user data.
+        self._mlp = None  # MLPGazePredictor() if TF_OK and SKLEARN_OK else None
         self._use_mlp = False
 
     def calibrate(self, features: np.ndarray, quad_labels: np.ndarray,
