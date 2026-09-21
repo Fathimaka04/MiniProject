@@ -117,8 +117,8 @@ class GazeAssistApp:
         logger.info("✓ Shared perception started")
 
         # 2. Start SOS monitor
-        self.sos_monitor.start()
-        logger.info("✓ SOS monitor active")
+        # SOS is now triggered by selecting an EMERGENCY tile, not by a
+        # 3-blink pattern. sos_monitor is left unstarted/unused.
 
         # 3. Check for existing user
         users = self.db.get_all_users()
@@ -126,14 +126,21 @@ class GazeAssistApp:
         # 4. Create Tk root
         self.root = tk.Tk()
         self.root.title("GazeAssist")
-        self.root.geometry("1024x700")
+        # Maximize to fill the screen (keeps title bar / close button,
+        # unlike true borderless fullscreen) — calibration and the phrase
+        # board both size themselves to whatever this window's actual
+        # size turns out to be.
+        try:
+            self.root.state("zoomed")  # Windows/most Linux window managers
+        except tk.TclError:
+            self.root.attributes("-zoomed", True)  # some Linux WMs use this instead
         self.root.configure(bg="#1a1a2e")
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         # Hide the main window until it actually has content (setup wizard /
         # calibration run in their own window first) — otherwise an empty
         # 1024x700 window sits on screen alongside them.
-        self.root.withdraw()
+        # self.root.withdraw()
 
         if users:
             # Existing user — skip setup
@@ -245,11 +252,11 @@ class GazeAssistApp:
         logger.info("✓ Navigate mode active — phrase board ready")
 
         # Now that the phrase board exists, reveal the main window
-        if self.root:
-            self.root.deiconify()
-            self.root.update_idletasks()
-            self.root.lift()
-            self.root.focus_force()
+        # if self.root:
+        #     self.root.deiconify()
+        #     self.root.update_idletasks()
+        #     self.root.lift()
+        #     self.root.focus_force()
 
         # Start the perception → UI update loop
         self._update_loop()
@@ -278,7 +285,7 @@ class GazeAssistApp:
                     _, _, avg_ear = compute_both_ears(frame.landmarks)
                     blink = self.blink_classifier.update(avg_ear, now)
 
-                    self.sos_monitor.on_blink(blink)
+                    # self.sos_monitor.on_blink(blink)
 
                     mode = self.state_machine.current_mode
                     if mode == AppMode.NAVIGATE:
@@ -356,6 +363,11 @@ class GazeAssistApp:
             self.db.log_communication(self.session_id, tile.text, tile.category.name)
 
         logger.info("Spoke: '%s' (%s)", text, tile.text)
+
+        # Selecting an EMERGENCY tile fires the same alert system that
+        # used to be triggered by 3 long blinks.
+        if getattr(tile, "is_emergency", False):
+            self._on_sos_trigger()
 
     def _on_pain_confirmed(self, level: int):
         """Handle confirmed pain level — speak + log."""

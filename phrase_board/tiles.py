@@ -28,7 +28,7 @@ class Tile:
     emoji: str = "💬"
     is_navigation: bool = False
     target_category: Optional[Category] = None  # set for nav tiles
-
+    is_emergency: bool = False  # selecting this tile fires the SOS alert system
 
 def create_default_tiles() -> dict[Category, list[Tile]]:
     """
@@ -118,15 +118,14 @@ def create_default_tiles() -> dict[Category, list[Tile]]:
     tiles[Category.EMERGENCY] = [
         Tile("call_doctor", "CALL DOCTOR", Category.EMERGENCY,
              {"hi": "डॉक्टर बुलाओ", "ml": "ഡോക്ടറെ വിളിക്കൂ", "ta": "மருத்துவரை அழையுங்கள்", "te": "డాక్టర్‌ను పిలవండి"},
-             "#D32F2F", "👨‍⚕️"),
+             "#D32F2F", "👨‍⚕️", is_emergency=True),
         Tile("cannot_breathe", "I CANNOT BREATHE", Category.EMERGENCY,
              {"hi": "मैं साँस नहीं ले पा रहा", "ml": "എനിക്ക് ശ്വസിക്കാൻ കഴിയുന്നില്ല", "ta": "என்னால் மூச்சு விட முடியவில்லை", "te": "నాకు ఊపిరి ఆడటం లేదు"},
-             "#B71C1C", "😤"),
+             "#B71C1C", "😤", is_emergency=True),
         Tile("falling", "I AM FALLING", Category.EMERGENCY,
              {"hi": "मैं गिर रहा हूँ", "ml": "ഞാൻ വീഴുകയാണ്", "ta": "நான் விழுகிறேன்", "te": "నేను పడిపోతున్నాను"},
-             "#E65100", "⚠️"),
+             "#E65100", "⚠️", is_emergency=True),
     ]
-
     return tiles
 
 

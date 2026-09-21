@@ -11,7 +11,6 @@ from enum import IntEnum
 from typing import Optional
 
 import numpy as np
-
 from gaze.features import weight_gaze_features
 
 try:
