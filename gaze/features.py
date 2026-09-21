@@ -44,7 +44,7 @@ LEFT_EYE_EAR = [263, 387, 385, 362, 380, 373]
 FEATURE_WEIGHTS = np.array([
     1.0, 1.0, 1.0, 1.0,   # iris normalised position  [0-3]
     1.0, 1.0, 1.0, 1.0,   # iris-corner dist ratios   [4-7]
-    3.0, 3.0, 2.0,         # pitch, yaw, roll          [8-10]
+    5.0, 3.0, 2.0,           # pitch, yaw, roll          [8-10]
     1.0, 1.0,              # EAR (right, left)         [11-12]
 ], dtype=np.float64)
 
