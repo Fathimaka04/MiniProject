@@ -150,7 +150,7 @@ class PhraseBoardUI:
         for w in self._grid_frame.winfo_children():
             w.destroy()
         self._tile_widgets.clear()
-        # self._last_highlighted_idx = None
+        self._last_highlighted_idx = None
         self._zone_to_tile.clear()
 
         tiles = self._current_tiles
@@ -258,12 +258,32 @@ class PhraseBoardUI:
         return min(idx, n - 1)
 
     def _update_cursor(self, tile_idx: int):
-        """Track which tile gaze is on, but don't visually highlight it.
+        """Highlight the tile currently being gazed at, gold.
 
-        Visual feedback now only happens on actual selection — see
-        _on_tile_armed() / _on_tile_confirmed() — not on mere gaze dwell.
+        Only touches widget config when the highlighted tile actually
+        changes — reconfiguring the same border 30x/sec even with
+        identical values forces Tk to redraw it every frame, which
+        shows up as visible flicker once gaze prediction is stable.
         """
-        self._cursor_zone = tile_idx
+        if tile_idx == getattr(self, "_last_highlighted_idx", None):
+            return  # nothing changed since last frame — skip redraw
+
+        prev_idx = getattr(self, "_last_highlighted_idx", None)
+        if prev_idx is not None and prev_idx in self._tile_widgets:
+            w = self._tile_widgets[prev_idx]
+            armed_id = self._armed_tile_id
+            if not (armed_id and w["tile"].id == armed_id):
+                w["frame"].config(highlightthickness=0)
+
+        if tile_idx in self._tile_widgets:
+            w = self._tile_widgets[tile_idx]
+            armed_id = self._armed_tile_id
+            if not (armed_id and w["tile"].id == armed_id):
+                w["frame"].config(
+                    highlightbackground="#FFD700", highlightthickness=3,
+                )
+
+        self._last_highlighted_idx = tile_idx
 
     # ── Confirmer callbacks ───────────────────────────────────────────
 

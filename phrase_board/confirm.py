@@ -81,7 +81,9 @@ class SelectionConfirmer:
 
             self._current_tile_id = tile_id
 
-            # Check dwell time for arming
+            # Check dwell time for arming — must be CONTINUOUS on this
+            # exact zone (any zone change above resets _zone_enter_time),
+            # so a brief accidental glance that moves on doesn't arm.
             if (
                 self._state == SelectionState.IDLE
                 and tile_id is not None
@@ -105,6 +107,8 @@ class SelectionConfirmer:
                         LONG_DELIBERATE confirms.
         """
         blink_name = str(blink_type)
+        logger.info("CONFIRMER on_blink: type=%s state=%s armed_tile=%s",
+                    blink_name, self._state, self._armed_tile_id)
 
         with self._lock:
             if "SHORT" in blink_name or blink_name == "BlinkType.SHORT_DELIBERATE":
