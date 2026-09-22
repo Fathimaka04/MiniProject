@@ -92,7 +92,7 @@ class GazeAssistApp:
 
         # Selection confirmer (shared by phrase board and pain scale)
         self.confirmer = SelectionConfirmer(
-            dwell_time_ms=800,
+            dwell_time_ms=1200,
             confirm_timeout_s=3.0,
         )
 
@@ -227,7 +227,7 @@ class GazeAssistApp:
     def _enter_navigate_mode(self):
         """Set up the Navigate mode UI."""
         # Create phrase board
-        self.confirmer = SelectionConfirmer(dwell_time_ms=800, confirm_timeout_s=3.0)
+        self.confirmer = SelectionConfirmer(dwell_time_ms=1200, confirm_timeout_s=3.0)
 
         self.phrase_board = PhraseBoardUI(
             root=self.root,
@@ -239,7 +239,7 @@ class GazeAssistApp:
         )
 
         # Create pain scale (hidden initially)
-        self.pain_confirmer = SelectionConfirmer(dwell_time_ms=800, confirm_timeout_s=3.0)
+        self.pain_confirmer = SelectionConfirmer(dwell_time_ms=1200, confirm_timeout_s=3.0)
         self.pain_scale = PainScaleUI(
             root=self.root,
             confirmer=self.pain_confirmer,
@@ -367,7 +367,7 @@ class GazeAssistApp:
         # Selecting an EMERGENCY tile fires the same alert system that
         # used to be triggered by 3 long blinks.
         if getattr(tile, "is_emergency", False):
-            self._on_sos_trigger()
+            self._on_sos_trigger(reason=text)
 
     def _on_pain_confirmed(self, level: int):
         """Handle confirmed pain level — speak + log."""
@@ -408,15 +408,15 @@ class GazeAssistApp:
             self.phrase_board.show()
         logger.info("Returned to navigate mode")
 
-    def _on_sos_trigger(self):
+    def _on_sos_trigger(self, reason: str = "Emergency signal"):
         """Handle SOS trigger — fire all alerts."""
-        logger.critical("🚨 SOS TRIGGERED!")
+        logger.critical("🚨 SOS TRIGGERED! Reason: %s", reason)
 
         # Set dashboard SOS flag
         set_sos_flag()
 
         # Fire all alert channels
-        self.alert_system.fire_all_alerts()
+        self.alert_system.fire_all_alerts(reason=reason)
 
     def _on_close(self):
         """Clean shutdown."""

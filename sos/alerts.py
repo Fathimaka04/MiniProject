@@ -89,7 +89,7 @@ class AlertSystem:
         """Update current session ID."""
         self._session_id = session_id
 
-    def fire_all_alerts(self):
+    def fire_all_alerts(self, reason: str = "Emergency signal"):
         """Fire all three alert channels simultaneously."""
         self._sos_active.set()
         channels_fired = []
@@ -100,7 +100,9 @@ class AlertSystem:
         threads.append(("speaker", t1))
 
         # Channel 2: WhatsApp/SMS
-        t2 = threading.Thread(target=self._fire_messaging_alert, daemon=True)
+        t2 = threading.Thread(
+            target=self._fire_messaging_alert, args=(reason,), daemon=True
+        )
         threads.append(("messaging", t2))
 
         # Channel 3: Dashboard notification
@@ -155,8 +157,15 @@ class AlertSystem:
         except Exception as e:
             logger.error(f"Speaker alarm failed: {e}")
 
-    def _fire_messaging_alert(self):
-        """Send WhatsApp/SMS to emergency contact."""
+    def _fire_messaging_alert(self, reason: str = "Emergency signal"):
+        """Send SMS (Fast2SMS) and WhatsApp (pywhatkit) simultaneously.
+
+        Both channels fire in parallel rather than one-after-another
+        fallback, since either can silently fail on its own (SMS gateway
+        issue, WhatsApp Web session logged out) — sending both maximizes
+        the chance the caregiver actually sees it. Only falls back to a
+        simulated log entry if BOTH real channels fail.
+        """
         if not self._emergency_contact:
             logger.warning("Messaging alert: no emergency contact configured")
             self._log_simulated_send("No emergency contact configured")
@@ -165,63 +174,113 @@ class AlertSystem:
         message = (
             "🚨 EMERGENCY ALERT from GazeAssist!\n"
             f"Time: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
-            "The patient has triggered the SOS emergency signal.\n"
+            f"Reason: {reason}\n"
             "Please check on them immediately!"
         )
+        results = {}
 
-        # Try Twilio first
-        if self._try_twilio(message):
-            return
+        def run_fast2sms():
+            results["sms"] = self._try_fast2sms(message)
 
-        # Try pywhatkit fallback
-        if self._try_pywhatkit(message):
-            return
+        def run_pywhatkit():
+            results["whatsapp"] = self._try_pywhatkit(message)
 
-        # Log simulated send
-        self._log_simulated_send(message)
+        t_sms = threading.Thread(target=run_fast2sms, daemon=True)
+        t_wa = threading.Thread(target=run_pywhatkit, daemon=True)
+        t_sms.start()
+        t_wa.start()
+        t_sms.join(timeout=20.0)
+        t_wa.join(timeout=20.0)
 
-    def _try_twilio(self, message: str) -> bool:
-        """Attempt to send via Twilio."""
-        account_sid = os.environ.get("TWILIO_ACCOUNT_SID")
-        auth_token = os.environ.get("TWILIO_AUTH_TOKEN")
-        from_number = os.environ.get("TWILIO_FROM_NUMBER")
+        logger.info(
+            "Messaging results — SMS: %s, WhatsApp: %s",
+            "sent" if results.get("sms") else "failed",
+            "sent" if results.get("whatsapp") else "failed",
+        )
 
-        if not all([account_sid, auth_token, from_number]):
-            logger.info("Twilio credentials not configured, skipping")
+        if not results.get("sms") and not results.get("whatsapp"):
+            self._log_simulated_send(message)
+
+    def _try_fast2sms(self, message: str) -> bool:
+        """Attempt to send a real SMS via Fast2SMS."""
+        api_key = os.environ.get("FAST2SMS_API_KEY")
+        if not api_key:
+            logger.info("Fast2SMS API key not configured, skipping")
             return False
+
+        # Fast2SMS wants a plain 10-digit Indian number, no +91/91 prefix.
+        phone = self._emergency_contact or ""
+        digits = "".join(c for c in phone if c.isdigit())
+        if len(digits) > 10:
+            digits = digits[-10:]  # strip any country code prefix
 
         try:
-            from twilio.rest import Client
-            client = Client(account_sid, auth_token)
-
-            # Try WhatsApp first
-            try:
-                wa_message = client.messages.create(
-                    from_=f"whatsapp:{from_number}",
-                    body=message,
-                    to=f"whatsapp:{self._emergency_contact}"
-                )
-                logger.info(f"✅ WhatsApp alert sent: {wa_message.sid}")
-                return True
-            except Exception:
-                pass
-
-            # Fallback to SMS
-            sms = client.messages.create(
-                from_=from_number,
-                body=message,
-                to=self._emergency_contact
+            import requests
+            resp = requests.post(
+                "https://www.fast2sms.com/dev/bulkV2",
+                headers={"authorization": api_key},
+                data={
+                    "route": "q",
+                    "message": message,
+                    "numbers": digits,
+                },
+                timeout=10,
             )
-            logger.info(f"✅ SMS alert sent: {sms.sid}")
-            return True
-
+            data = resp.json()
+            if data.get("return") is True:
+                logger.info("✅ SMS alert sent via Fast2SMS")
+                return True
+            logger.error("Fast2SMS send failed: %s", data)
+            return False
         except ImportError:
-            logger.info("Twilio package not installed")
+            logger.info("requests package not installed for Fast2SMS")
             return False
         except Exception as e:
-            logger.error(f"Twilio send failed: {e}")
+            logger.error("Fast2SMS send failed: %s", e)
             return False
 
+#    def _try_twilio(self, message: str) -> bool:
+#         """Attempt to send via Twilio."""
+#         account_sid = os.environ.get("TWILIO_ACCOUNT_SID")
+#         auth_token = os.environ.get("TWILIO_AUTH_TOKEN")
+#         from_number = os.environ.get("TWILIO_FROM_NUMBER")
+
+#         if not all([account_sid, auth_token, from_number]):
+#             logger.info("Twilio credentials not configured, skipping")
+#             return False
+
+#         try:
+#             from twilio.rest import Client
+#             client = Client(account_sid, auth_token)
+
+#             # Try WhatsApp first
+#             try:
+#                 wa_message = client.messages.create(
+#                     from_=f"whatsapp:{from_number}",
+#                     body=message,
+#                     to=f"whatsapp:{self._emergency_contact}"
+#                 )
+#                 logger.info(f"✅ WhatsApp alert sent: {wa_message.sid}")
+#                 return True
+#             except Exception:
+#                 pass
+
+#             # Fallback to SMS
+#             sms = client.messages.create(
+#                 from_=from_number,
+#                 body=message,
+#                 to=self._emergency_contact
+#             )
+#             logger.info(f"✅ SMS alert sent: {sms.sid}")
+#             return True
+
+#         except ImportError:
+#             logger.info("Twilio package not installed")
+#             return False
+#         except Exception as e:
+#             logger.error(f"Twilio send failed: {e}")
+#             return False
+   
     def _try_pywhatkit(self, message: str) -> bool:
         """Attempt to send via pywhatkit."""
         try:
