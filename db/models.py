@@ -1,8 +1,34 @@
+import re
 import sqlite3
 import json
 import os
 import threading
+import logging
 from typing import List, Dict, Optional, Union, Any
+
+logger = logging.getLogger(__name__)
+
+
+def _is_placeholder_phone(number: str) -> bool:
+    """Return True if *number* looks like a placeholder, not a real phone.
+
+    Catches patterns like +91XXXXXXXXXX, 0000000000, 1234567890, etc.
+    Used as a safety net in create_user() — the UI wizard also validates,
+    but this ensures bad data never reaches the DB regardless of caller.
+    """
+    if not number:
+        return False  # empty is acceptable (contact is optional)
+    if re.search(r'[Xx]', number):
+        return True
+    digits = re.sub(r'\D', '', number)
+    if 0 < len(digits) < 7:
+        return True
+    if digits and len(set(digits)) == 1:
+        return True
+    if digits in '0123456789012345':
+        return True
+    return False
+
 
 class Database:
     """
@@ -61,7 +87,16 @@ class Database:
             
         Returns:
             int: The ID of the newly created user.
+            
+        Raises:
+            ValueError: If emergency_contact looks like a placeholder.
         """
+        if _is_placeholder_phone(emergency_contact or ""):
+            raise ValueError(
+                f"Emergency contact '{emergency_contact}' looks like a "
+                "placeholder — refusing to save. Please provide a real number."
+            )
+
         with self._lock:
             with self._get_connection() as conn:
                 cursor = conn.cursor()

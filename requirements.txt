@@ -31,3 +31,5 @@ pygame>=2.5
 
 # Utilities
 asyncio-compat>=0.1; python_version>="3.11"
+requests>=2.31
+python-dotenv>=1.0

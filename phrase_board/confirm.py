@@ -107,7 +107,7 @@ class SelectionConfirmer:
                         LONG_DELIBERATE confirms.
         """
         blink_name = str(blink_type)
-        logger.info("CONFIRMER on_blink: type=%s state=%s armed_tile=%s",
+        logger.debug("CONFIRMER on_blink: type=%s state=%s armed_tile=%s",
                     blink_name, self._state, self._armed_tile_id)
 
         with self._lock:
@@ -137,6 +137,8 @@ class SelectionConfirmer:
             self._state = SelectionState.IDLE
             self._armed_tile_id = None
             self._armed_zone = -1
+            self._current_zone = -1
+            self._current_tile_id = None
 
     # ── Callbacks property setters ────────────────────────────────────
 
@@ -169,6 +171,12 @@ class SelectionConfirmer:
         self._state = SelectionState.IDLE
         self._armed_tile_id = None
         self._armed_zone = -1
+        # Force a fresh, full dwell before anything can arm again. Without
+        # this, _zone_enter_time is still from BEFORE the confirm, so the
+        # tile in the same spot on the NEXT page (or the same tile again,
+        # e.g. CALL DOCTOR -> a second SOS) armed instantly.
+        self._current_zone = -1
+        self._current_tile_id = None
         logger.info("Tile CONFIRMED: %s", tile_id)
 
         if self._on_confirm and tile_id:

@@ -23,6 +23,10 @@ import tkinter as tk
 from collections import deque, Counter
 from typing import Optional
 
+# ── Load .env before anything reads os.environ ────────────────────────
+from dotenv import load_dotenv
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+
 # ── Logging ───────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
@@ -134,7 +138,7 @@ class GazeAssistApp:
             self.root.state("zoomed")  # Windows/most Linux window managers
         except tk.TclError:
             self.root.attributes("-zoomed", True)  # some Linux WMs use this instead
-        self.root.configure(bg="#1a1a2e")
+        self.root.configure(bg="#0F172A")
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         # Hide the main window until it actually has content (setup wizard /
@@ -213,9 +217,9 @@ class GazeAssistApp:
             user_dir = os.path.join(DATA_DIR, "users", str(self.user_id))
             os.makedirs(user_dir, exist_ok=True)
 
-            # Proceed to navigate
+            # Proceed to blink enrollment, then navigate
             self.state_machine.transition_to(AppMode.NAVIGATE)
-            self._enter_navigate_mode()
+            self._run_blink_enrollment()
 
         calib = CalibrationScreen(
             perception=self.perception,
@@ -223,6 +227,82 @@ class GazeAssistApp:
             parent=self.root,
         )
         calib.start()
+
+    def _run_blink_enrollment(self):
+        """Personalise the blink (EAR) threshold — FAST.
+
+        Old behaviour ran the full 3-phase / 30-blink BlinkEnrollment
+        window (with "Begin" buttons a motor-impaired user can't press)
+        on EVERY launch. Now:
+          * returning user  -> load saved threshold instantly (0 s)
+          * first launch    -> ~1.5 s silent "keep your eyes open" baseline,
+                               no button presses, saved for next time
+        """
+        user_dir = os.path.join(DATA_DIR, "users", str(self.user_id))
+        loader = BlinkEnrollment(self.perception, compute_both_ears, lambda _: None)
+
+        saved = loader.load_enrollment(user_dir)
+        if saved:
+            self._apply_blink_threshold(saved.ear_threshold)
+            logger.info("✓ Loaded saved blink threshold %.3f", saved.ear_threshold)
+            self._enter_navigate_mode()
+            return
+
+        self._quick_blink_baseline(loader, user_dir)
+
+    def _quick_blink_baseline(self, loader, user_dir):
+        """Measure open-eye EAR for ~1.5 s and derive the blink threshold."""
+        overlay = tk.Frame(self.root, bg="#0F172A")
+        overlay.pack(fill="both", expand=True)
+        tk.Label(
+            overlay, text="Getting ready…", font=("Segoe UI", 28, "bold"),
+            fg="#F1F5F9", bg="#0F172A",
+        ).pack(expand=True, pady=(0, 8), anchor="s")
+        tk.Label(
+            overlay, text="Keep your eyes open and look at the screen",
+            font=("Segoe UI", 16), fg="#94A3B8", bg="#0F172A",
+        ).pack(expand=True, anchor="n")
+
+        samples: list[float] = []
+
+        def sample(frames_left: int = 45):
+            frame = self.perception.get_current_frame()
+            if frame.face_detected and frame.landmarks:
+                try:
+                    _, _, avg = compute_both_ears(frame.landmarks)
+                    samples.append(avg)
+                except Exception:
+                    pass
+            if frames_left > 0:
+                self.root.after(33, sample, frames_left - 1)
+                return
+
+            overlay.destroy()
+            if len(samples) >= 10:
+                # drop the lowest 20% in case a natural blink slipped in
+                vals = sorted(samples)[len(samples) // 5:]
+                avg_open = sum(vals) / len(vals)
+                threshold = avg_open * 0.7
+                self._apply_blink_threshold(threshold)
+                from blink.enrollment import EnrollmentData
+                data = EnrollmentData(ear_threshold=self.blink_classifier.rule_based.ear_threshold,
+                                      avg_open_ear=avg_open)
+                try:
+                    loader.save_enrollment(data, user_dir)
+                except Exception as e:
+                    logger.error("Could not save blink baseline: %s", e)
+                logger.info("✓ Blink baseline: open=%.3f threshold=%.3f",
+                            avg_open, self.blink_classifier.rule_based.ear_threshold)
+            else:
+                logger.warning("Blink baseline: face not seen, keeping default threshold")
+            self._enter_navigate_mode()
+
+        self.root.after(300, sample)
+
+    def _apply_blink_threshold(self, threshold: float):
+        """Clamp to a safe range so one bad reading can't break blinking."""
+        threshold = max(0.15, min(0.26, float(threshold)))
+        self.blink_classifier.rule_based.ear_threshold = threshold
 
     def _enter_navigate_mode(self):
         """Set up the Navigate mode UI."""
@@ -273,7 +353,7 @@ class GazeAssistApp:
                 self._tick_count = 0
             self._tick_count += 1
             if self._tick_count % 30 == 0:  # once per second at 30Hz
-                logger.info("UPDATE LOOP TICK #%d", self._tick_count)
+                logger.debug("UPDATE LOOP TICK #%d", self._tick_count)
 
             frame = self.perception.get_current_frame()
             now = time.time()
@@ -300,25 +380,24 @@ class GazeAssistApp:
                 # (mid-blink), since iris landmarks are unreliable then and
                 # would corrupt the locked gaze zone right as the user
                 # tries to confirm a selection.
-                eyes_open = avg_ear is None or avg_ear >= EYES_CLOSING_EAR
+                eyes_open = avg_ear is None or avg_ear >= self.blink_classifier.rule_based.ear_threshold
                 try:
                     if eyes_open and self.gaze_predictor.is_calibrated:
                         features = extract_gaze_features(
                             frame.landmarks, frame.frame_width, frame.frame_height
                         )
+                        # predict_zone() now includes EMA temporal smoothing
                         raw_zone = self.gaze_predictor.predict_zone(features)
                         self._zone_history.append(raw_zone)
                         counts = Counter(self._zone_history)
                         candidate, candidate_count = counts.most_common(1)[0]
-                        # Only switch the "locked" zone away from its current
-                        # value when the new candidate has a STRONG majority
-                        # (70%+ of the recent window) — a bare plurality can
-                        # flip back and forth on near-ties, causing flicker.
-                        threshold = max(1, int(len(self._zone_history) * 0.7))
+                        # Lighter majority threshold (60%) since the model's
+                        # EMA smoother already filters single-frame glitches.
+                        threshold = max(1, int(len(self._zone_history) * 0.6))
                         if candidate != self._locked_zone and candidate_count >= threshold:
                             self._locked_zone = candidate
                         zone = self._locked_zone
-                        logger.info("PREDICTED ZONE: raw=%s locked=%s", raw_zone, zone)
+                        logger.debug("PREDICTED ZONE: raw=%s locked=%s", raw_zone, zone)
 
                         mode = self.state_machine.current_mode
                         if mode == AppMode.NAVIGATE and self.phrase_board:
@@ -326,14 +405,14 @@ class GazeAssistApp:
                         elif mode == AppMode.PAIN and self.pain_scale:
                             self.pain_scale.update_gaze_zone(zone, now)
                     elif not eyes_open:
-                        logger.info("Skipping gaze update — eyes closing (avg_ear below threshold)")
+                        logger.debug("Skipping gaze update — eyes closing (avg_ear below threshold)")
                     else:
-                        logger.info("Gaze predictor not calibrated yet")
+                        logger.debug("Gaze predictor not calibrated yet")
 
                 except Exception:
                     logger.exception("Gaze processing error")
             else:
-                logger.info("No face detected this frame")
+                logger.debug("No face detected this frame")
 
             if self.phrase_board:
                 self.phrase_board.update_fps(self.perception.actual_fps)
@@ -415,8 +494,14 @@ class GazeAssistApp:
         # Set dashboard SOS flag
         set_sos_flag()
 
-        # Fire all alert channels
-        self.alert_system.fire_all_alerts(reason=reason)
+        # Fire all alert channels in the background — fire_all_alerts()
+        # join()s its worker threads (network calls to Meta/Fast2SMS), and
+        # running that on the Tk thread froze the UI for 1-2 s per SOS.
+        import threading
+        threading.Thread(
+            target=self.alert_system.fire_all_alerts,
+            kwargs={"reason": reason}, daemon=True,
+        ).start()
 
     def _on_close(self):
         """Clean shutdown."""
@@ -446,4 +531,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main() 
+    main()
