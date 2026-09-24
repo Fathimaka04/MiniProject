@@ -4,11 +4,18 @@ GazeAssist - Gaze MLP for zone prediction with Ridge Regression fallback.
 Predicts one of 6 zones directly, matching the phrase board's 3-column x
 2-row tile grid 1:1 (zone id == tile grid index) — no quadrant/sub-zone
 translation layer.
+
+Accuracy improvements:
+  * Ridge alpha tuned to 0.5 (less regularisation — works better with the
+    augmented + weighted calibration data)
+  * Prediction smoothing: exponential moving average over recent predictions
+    avoids single-frame glitches without adding heavy latency
 """
 
 import logging
 from enum import IntEnum
 from typing import Optional
+from collections import deque
 
 import numpy as np
 from gaze.features import weight_gaze_features
@@ -20,12 +27,6 @@ try:
 except ImportError:
     SKLEARN_OK = False
 
-if not SKLEARN_OK:
-    logger.error(
-        "scikit-learn is not installed/importable — gaze calibration will "
-        "silently do nothing until it's installed (`pip install scikit-learn`)."
-    )
-
 try:
     import tensorflow as tf
     from tensorflow import keras
@@ -35,7 +36,13 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-N_FEATURES = 13
+if not SKLEARN_OK:
+    logger.error(
+        "scikit-learn is not installed/importable — gaze calibration will "
+        "silently do nothing until it's installed (`pip install scikit-learn`)."
+    )
+
+N_FEATURES = 17
 N_ZONES = 6  # matches the 3-col x 2-row tile grid, one class per tile slot
 
 
@@ -50,8 +57,8 @@ class RidgeGazePredictor:
 
     def __init__(self):
         self._scaler = StandardScaler() if SKLEARN_OK else None
-        self._quad_model = RidgeClassifier(alpha=1.0) if SKLEARN_OK else None
-        self._zone_model = RidgeClassifier(alpha=1.0) if SKLEARN_OK else None
+        self._quad_model = RidgeClassifier(alpha=0.5) if SKLEARN_OK else None
+        self._zone_model = RidgeClassifier(alpha=0.5) if SKLEARN_OK else None
         self._calibrated = False
 
     def calibrate(self, features: np.ndarray, quad_labels: np.ndarray,
@@ -60,9 +67,9 @@ class RidgeGazePredictor:
         Fit on calibration data.
 
         Args:
-            features:    (N, 13)
-            quad_labels: (N,) ints 0-3
-            zone_labels: (N,) ints 0-15  (optional, for fine zones)
+            features:    (N, 17)
+            quad_labels: (N,) ints 0-5
+            zone_labels: (N,) ints 0-5  (optional, for fine zones)
         """
         if not SKLEARN_OK:
             logger.error("scikit-learn not available")
@@ -88,6 +95,18 @@ class RidgeGazePredictor:
         features = weight_gaze_features(features)
         X = self._scaler.transform(features.reshape(1, -1))
         return int(self._zone_model.predict(X)[0])
+
+    def predict_zone_proba(self, features: np.ndarray) -> np.ndarray:
+        """Return decision function scores (not true probabilities) for
+        all zones — used by the EMA smoother in GazePredictor."""
+        if not self._calibrated:
+            return np.zeros(N_ZONES)
+        features = weight_gaze_features(features)
+        X = self._scaler.transform(features.reshape(1, -1))
+        scores = self._zone_model.decision_function(X)
+        if scores.ndim == 1:
+            return scores
+        return scores[0]
 
     @property
     def is_calibrated(self) -> bool:
@@ -164,25 +183,30 @@ class MLPGazePredictor:
 
 class GazePredictor:
     """
-    Unified gaze predictor: tries MLP, falls back to Ridge.
+    Unified gaze predictor with temporal smoothing.
 
-    Implements coarse-to-fine: call predict_quadrant() first to select
-    a screen quadrant, then predict_zone() for the fine sub-zone.
+    Uses an exponential moving average (EMA) over Ridge decision-function
+    scores to stabilise predictions.  This is superior to simple majority
+    voting because it:
+      * weighs recent frames more than old ones (lower latency)
+      * is less susceptible to brief single-frame glitches
+      * works with continuous scores, not just discrete votes
     """
+
+    EMA_ALPHA = 0.35  # higher = more responsive, lower = more stable
 
     def __init__(self):
         self._ridge = RidgeGazePredictor() if SKLEARN_OK else None
-        # MLP disabled for now: with only ~45-65 calibration samples per
-        # zone (all from one short, near-identical gaze window), the MLP
-        # overfits badly and generalizes poorly to real usage. Ridge is a
-        # simpler linear model that's much more robust with this little
-        # per-user data.
-        self._mlp = None  # MLPGazePredictor() if TF_OK and SKLEARN_OK else None
+        # MLP disabled: with only calibration-time data, Ridge is more robust
+        self._mlp = None
         self._use_mlp = False
+        # EMA score accumulator
+        self._ema_scores: Optional[np.ndarray] = None
 
     def calibrate(self, features: np.ndarray, quad_labels: np.ndarray,
                   zone_labels: Optional[np.ndarray] = None):
         """Calibrate both predictors; prefer MLP if available."""
+        self._ema_scores = None  # reset smoother on recalibration
         if self._ridge:
             self._ridge.calibrate(features, quad_labels, zone_labels)
 
@@ -202,10 +226,23 @@ class GazePredictor:
         return int(GazeZone.NONE)
 
     def predict_zone(self, features: np.ndarray) -> int:
+        """Predict gaze zone with EMA temporal smoothing."""
         if self._use_mlp and self._mlp and self._mlp.is_calibrated:
             return self._mlp.predict_zone(features)
+
         if self._ridge and self._ridge.is_calibrated:
-            return self._ridge.predict_zone(features)
+            raw_scores = self._ridge.predict_zone_proba(features)
+
+            # Initialise EMA on first call
+            if self._ema_scores is None:
+                self._ema_scores = raw_scores.copy()
+            else:
+                self._ema_scores = (
+                    self.EMA_ALPHA * raw_scores
+                    + (1 - self.EMA_ALPHA) * self._ema_scores
+                )
+            return int(np.argmax(self._ema_scores))
+
         return int(GazeZone.NONE)
 
     @property

@@ -1,7 +1,7 @@
 """
-GazeAssist - Pain Scale Communicator UI (Tkinter)
+GazeAssist - Pain Scale Communicator UI (Tkinter — premium redesign)
 
-1-10 visual scale with coloured circles and face icons.
+1-10 visual scale with coloured circles, face icons, and matching dark theme.
 Reuses SelectionConfirmer from phrase_board.confirm.
 """
 
@@ -13,18 +13,29 @@ from phrase_board.confirm import SelectionConfirmer
 
 logger = logging.getLogger(__name__)
 
+# ── Theme (matches phrase board) ──────────────────────────────────────
+BG       = "#0B0F1A"
+SURFACE  = "#131B2E"
+TEXT     = "#F0F4FC"
+MUTED    = "#6B7FA0"
+ACCENT   = "#4FC3F7"
+ARMED    = "#FFB74D"
+SUCCESS  = "#66BB6A"
+FONT     = "Segoe UI"
+EMOJI    = "Segoe UI Emoji"
+
 # Colour gradient: green → yellow → orange → red
 PAIN_COLORS = [
-    "#4CAF50",  # 1  green
+    "#43A047",  # 1  green
     "#66BB6A",  # 2
-    "#8BC34A",  # 3
-    "#CDDC39",  # 4  yellow-green
-    "#FFEB3B",  # 5  yellow
+    "#9CCC65",  # 3
+    "#D4E157",  # 4  yellow-green
+    "#FFEE58",  # 5  yellow
     "#FFC107",  # 6  amber
     "#FF9800",  # 7  orange
     "#FF5722",  # 8  deep orange
     "#F44336",  # 9  red
-    "#D32F2F",  # 10 dark red
+    "#C62828",  # 10 dark red
 ]
 
 PAIN_EMOJIS = ["😊", "🙂", "😐", "😕", "😟", "😣", "😖", "😫", "😩", "😭"]
@@ -56,7 +67,7 @@ class PainScaleUI:
         self._on_pain_confirmed = on_pain_confirmed
         self._on_back = on_back
 
-        self._frame = tk.Frame(root, bg="#1a1a2e")
+        self._frame = tk.Frame(root, bg=BG)
         self._level_widgets: dict[int, dict] = {}
         self._zone_to_level: dict[int, int] = {}
         self._armed_level: Optional[int] = None
@@ -70,21 +81,31 @@ class PainScaleUI:
 
     def _build_ui(self):
         """Build the pain scale UI."""
-        # Title
+        # Header
+        header = tk.Frame(self._frame, bg="#0D1220", height=56)
+        header.pack(fill="x")
+        header.pack_propagate(False)
+
+        tk.Label(header, text="😣", font=(EMOJI, 18), fg=ACCENT,
+                 bg="#0D1220").pack(side="left", padx=(24, 8))
+
         title_text = PAIN_TRANSLATIONS.get(self._language, "Pain Level")
         tk.Label(
-            self._frame, text=title_text,
-            font=("Helvetica", 22, "bold"), fg="#e0e0e0", bg="#1a1a2e",
-        ).pack(pady=(20, 5))
+            header, text=title_text,
+            font=(FONT, 18, "bold"), fg=TEXT, bg="#0D1220",
+        ).pack(side="left")
 
         tk.Label(
-            self._frame, text="Select your pain level (1 = low, 10 = high)",
-            font=("Helvetica", 12), fg="#888888", bg="#1a1a2e",
-        ).pack(pady=(0, 15))
+            header, text="Select your pain level (1 = low, 10 = high)",
+            font=(FONT, 11), fg=MUTED, bg="#0D1220",
+        ).pack(side="left", padx=30)
+
+        # Accent line
+        tk.Frame(self._frame, bg=ACCENT, height=1).pack(fill="x")
 
         # Grid: 2 rows × 5 columns
-        grid = tk.Frame(self._frame, bg="#1a1a2e")
-        grid.pack(fill="both", expand=True, padx=20, pady=10)
+        grid = tk.Frame(self._frame, bg=BG)
+        grid.pack(fill="both", expand=True, padx=24, pady=18)
 
         for i in range(10):
             level = i + 1
@@ -94,42 +115,58 @@ class PainScaleUI:
             color = PAIN_COLORS[i]
             emoji = PAIN_EMOJIS[i]
 
-            cell = tk.Frame(grid, bg=color, relief="flat")
+            cell = tk.Frame(grid, bg=SURFACE,
+                            highlightthickness=2,
+                            highlightbackground="#1E2A45",
+                            highlightcolor="#1E2A45")
             cell.grid(row=r, column=c, padx=8, pady=8, sticky="nsew")
 
-            tk.Label(
-                cell, text=emoji, font=("Segoe UI Emoji", 32),
-                bg=color, fg="white",
-            ).pack(pady=(15, 0))
+            # Colour strip at top
+            strip = tk.Frame(cell, bg=color, height=4)
+            strip._keep_bg = True
+            strip.pack(fill="x", side="top")
 
             tk.Label(
-                cell, text=str(level), font=("Helvetica", 24, "bold"),
-                bg=color, fg="white",
-            ).pack(pady=(0, 15))
+                cell, text=emoji, font=(EMOJI, 30),
+                bg=SURFACE, fg=TEXT,
+            ).pack(pady=(12, 2))
 
-            self._level_widgets[i] = {"frame": cell, "color": color, "level": level}
+            tk.Label(
+                cell, text=str(level), font=(FONT, 22, "bold"),
+                bg=SURFACE, fg=TEXT,
+            ).pack(pady=(0, 12))
+
+            self._level_widgets[i] = {"frame": cell, "color": color,
+                                       "level": level, "strip": strip}
             self._zone_to_level[i] = level
 
         for c in range(5):
-            grid.columnconfigure(c, weight=1)
+            grid.columnconfigure(c, weight=1, uniform="pcol")
         for r in range(2):
-            grid.rowconfigure(r, weight=1)
+            grid.rowconfigure(r, weight=1, uniform="prow")
 
-        # Status
+        # Status bar
+        status = tk.Frame(self._frame, bg=BG, height=56)
+        status.pack(fill="x", side="bottom")
+        status.pack_propagate(False)
         self._status_label = tk.Label(
-            self._frame, text="Look at a number to select",
-            font=("Helvetica", 13), fg="#888888", bg="#1a1a2e",
+            status, text="👁  Look at a number to select",
+            font=(FONT, 14), fg=MUTED, bg=BG,
         )
-        self._status_label.pack(pady=10)
+        self._status_label.pack(expand=True)
 
         # Back button (also gaze-selectable as zone 10)
-        back_frame = tk.Frame(self._frame, bg="#607D8B")
-        back_frame.pack(pady=(5, 15))
+        back_frame = tk.Frame(self._frame, bg="#1E2A45",
+                              highlightthickness=2,
+                              highlightbackground="#2A3A55",
+                              highlightcolor="#2A3A55")
+        back_frame.pack(pady=(0, 12))
         tk.Label(
-            back_frame, text="🔙 BACK", font=("Helvetica", 14, "bold"),
-            bg="#607D8B", fg="white", padx=30, pady=8,
+            back_frame, text="←  BACK", font=(FONT, 13, "bold"),
+            bg="#1E2A45", fg=MUTED, padx=28, pady=8,
         ).pack()
-        self._level_widgets[10] = {"frame": back_frame, "color": "#607D8B", "level": -1}
+        self._level_widgets[10] = {"frame": back_frame, "color": "#1E2A45",
+                                    "level": -1, "strip": None}
         self._zone_to_level[10] = -1  # -1 = back
 
     # ── Gaze updates ──────────────────────────────────────────────────
@@ -145,31 +182,34 @@ class PainScaleUI:
         # Visual highlight
         for i, w in self._level_widgets.items():
             if i == idx:
-                w["frame"].config(highlightbackground="#FFD700", highlightthickness=3)
+                w["frame"].config(highlightbackground=ACCENT,
+                                  highlightcolor=ACCENT)
             elif self._armed_level is not None and w["level"] == self._armed_level:
                 pass  # keep armed highlight
             else:
-                w["frame"].config(highlightthickness=0)
+                w["frame"].config(highlightbackground="#1E2A45",
+                                  highlightcolor="#1E2A45")
 
     # ── Confirmer callbacks ───────────────────────────────────────────
 
     def _on_level_armed(self, tile_id: str):
         if tile_id == "pain_back":
-            self._status_label.config(text="▶ BACK armed — long blink to confirm", fg="#FFD700")
+            self._status_label.config(
+                text="⚡ BACK armed — close eyes to confirm", fg=ARMED)
             return
         try:
             level = int(tile_id.split("_")[1])
             self._armed_level = level
             self._status_label.config(
-                text=f"▶ Pain level {level} armed — long blink to confirm",
-                fg="#FFD700",
+                text=f"⚡ Pain level {level} armed — close eyes to confirm",
+                fg=ARMED,
             )
             # Highlight armed level
             for w in self._level_widgets.values():
                 if w["level"] == level:
-                    w["frame"].config(bg="#FFD700", highlightthickness=4)
-                    for child in w["frame"].winfo_children():
-                        child.config(bg="#FFD700")
+                    w["frame"].config(highlightbackground=ARMED,
+                                      highlightcolor=ARMED,
+                                      highlightthickness=3)
         except (ValueError, IndexError):
             pass
 
@@ -185,7 +225,7 @@ class PainScaleUI:
         try:
             level = int(tile_id.split("_")[1])
             self._status_label.config(
-                text=f"✓ Pain level {level} recorded", fg="#4CAF50",
+                text=f"✓  Pain level {level} recorded", fg=SUCCESS,
             )
             if self._on_pain_confirmed:
                 self._on_pain_confirmed(level)
@@ -196,14 +236,14 @@ class PainScaleUI:
     def _on_arm_cancelled(self):
         self._armed_level = None
         self._reset_colors()
-        self._status_label.config(text="Look at a number to select", fg="#888888")
+        self._status_label.config(
+            text="👁  Look at a number to select", fg=MUTED)
 
     def _reset_colors(self):
         for w in self._level_widgets.values():
-            color = w["color"]
-            w["frame"].config(bg=color, highlightthickness=0)
-            for child in w["frame"].winfo_children():
-                child.config(bg=color)
+            w["frame"].config(highlightbackground="#1E2A45",
+                              highlightcolor="#1E2A45",
+                              highlightthickness=2)
 
     # ── Visibility ────────────────────────────────────────────────────
 

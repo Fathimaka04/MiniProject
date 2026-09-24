@@ -239,70 +239,86 @@ class AlertSystem:
             logger.error("Fast2SMS send failed: %s", e)
             return False
 
-#    def _try_twilio(self, message: str) -> bool:
-#         """Attempt to send via Twilio."""
-#         account_sid = os.environ.get("TWILIO_ACCOUNT_SID")
-#         auth_token = os.environ.get("TWILIO_AUTH_TOKEN")
-#         from_number = os.environ.get("TWILIO_FROM_NUMBER")
 
-#         if not all([account_sid, auth_token, from_number]):
-#             logger.info("Twilio credentials not configured, skipping")
-#             return False
-
-#         try:
-#             from twilio.rest import Client
-#             client = Client(account_sid, auth_token)
-
-#             # Try WhatsApp first
-#             try:
-#                 wa_message = client.messages.create(
-#                     from_=f"whatsapp:{from_number}",
-#                     body=message,
-#                     to=f"whatsapp:{self._emergency_contact}"
-#                 )
-#                 logger.info(f"✅ WhatsApp alert sent: {wa_message.sid}")
-#                 return True
-#             except Exception:
-#                 pass
-
-#             # Fallback to SMS
-#             sms = client.messages.create(
-#                 from_=from_number,
-#                 body=message,
-#                 to=self._emergency_contact
-#             )
-#             logger.info(f"✅ SMS alert sent: {sms.sid}")
-#             return True
-
-#         except ImportError:
-#             logger.info("Twilio package not installed")
-#             return False
-#         except Exception as e:
-#             logger.error(f"Twilio send failed: {e}")
-#             return False
-   
     def _try_pywhatkit(self, message: str) -> bool:
-        """Attempt to send via pywhatkit."""
-        try:
-            import pywhatkit
-            phone = self._emergency_contact
-            if not phone.startswith("+"):
-                phone = f"+91{phone}"  # Default to India country code
+        """Send WhatsApp via Meta's official Cloud API (test sandbox).
 
-            pywhatkit.sendwhatmsg_instantly(
-                phone_no=phone,
-                message=message,
-                wait_time=10,
-                tab_close=True
+        Uses a **template message** — the sandbox only delivers template
+        messages to numbers that haven't first messaged the test number.
+        The pre-approved ``hello_world`` template works on every sandbox
+        without extra setup.
+        """
+        phone_number_id = os.environ.get("META_WA_PHONE_NUMBER_ID")
+        access_token = os.environ.get("META_WA_ACCESS_TOKEN")
+
+        if not phone_number_id or not access_token:
+            logger.info("Meta WhatsApp Cloud API not configured, skipping")
+            return False
+
+        phone = self._emergency_contact or ""
+        digits = "".join(c for c in phone if c.isdigit())
+        if not phone.startswith("+") and len(digits) == 10:
+            digits = "91" + digits  # default India country code
+
+        try:
+            import requests
+
+            # --- Attempt 1: free-form text (works if recipient opted in) ---
+            resp = requests.post(
+                f"https://graph.facebook.com/v18.0/{phone_number_id}/messages",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "messaging_product": "whatsapp",
+                    "to": digits,
+                    "type": "text",
+                    "text": {"body": message},
+                },
+                timeout=10,
             )
-            logger.info("✅ WhatsApp alert sent via pywhatkit")
-            return True
+            data = resp.json()
+            if resp.status_code == 200 and "messages" in data:
+                logger.info("✅ WhatsApp alert sent (text): %s",
+                            data["messages"][0].get("id"))
+                return True
+
+            logger.warning("Free-form text failed (%s), trying template...",
+                           data.get("error", {}).get("message", resp.status_code))
+
+            # --- Attempt 2: template message (always works on sandbox) ---
+            resp2 = requests.post(
+                f"https://graph.facebook.com/v18.0/{phone_number_id}/messages",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "messaging_product": "whatsapp",
+                    "to": digits,
+                    "type": "template",
+                    "template": {
+                        "name": "hello_world",
+                        "language": {"code": "en_US"},
+                    },
+                },
+                timeout=10,
+            )
+            data2 = resp2.json()
+            if resp2.status_code == 200 and "messages" in data2:
+                logger.info("✅ WhatsApp alert sent (template): %s",
+                            data2["messages"][0].get("id"))
+                return True
+
+            logger.error("Meta WhatsApp template also failed: %s", data2)
+            return False
 
         except ImportError:
-            logger.info("pywhatkit not installed")
+            logger.info("requests package not installed")
             return False
         except Exception as e:
-            logger.error(f"pywhatkit send failed: {e}")
+            logger.error(f"Meta WhatsApp send failed: {e}")
             return False
 
     def _log_simulated_send(self, message: str):

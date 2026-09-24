@@ -131,10 +131,11 @@ class BlinkClassifier:
         self.window_size = window_size
         self.ear_buffer = []
         self.lock = threading.Lock()
+        self._lstm_trained = False  # True only after explicit training/loading
         
     def is_model_loaded(self) -> bool:
-        """Check if LSTM model is available and loaded."""
-        return TF_AVAILABLE and self.lstm.model is not None
+        """Check if LSTM model is available, loaded, AND trained."""
+        return TF_AVAILABLE and self.lstm.model is not None and self._lstm_trained
         
     def update(self, avg_ear: float, timestamp: float) -> BlinkType:
         """
