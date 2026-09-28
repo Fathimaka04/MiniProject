@@ -1,5 +1,5 @@
 """
-GazeAssist - 6-point gaze calibration screen (Tkinter — premium redesign).
+GazeAssist - 6-point gaze calibration screen (Tkinter).
 
 Renders as a Frame INSIDE the app's single main window (not a separate
 Toplevel/fullscreen window), so calibration and the phrase board share
@@ -8,48 +8,33 @@ one continuous window instead of one window closing and another opening.
 Shows 6 dots in a 3x2 grid — the SAME layout as the phrase board's tile
 grid (3 columns, 2 rows) — so each calibration zone maps 1:1 onto a tile
 position with no translation layer needed. User gazes at each dot for
-~1.3 s while the system records feature vectors.
-
-Accuracy improvements:
-  * 40 samples per point (up from 25) for more robust classifier training
-  * Outlier rejection: drops samples with extreme head-pose deviation
-  * Feature augmentation: adds small Gaussian noise copies for better
-    Ridge classifier generalisation
+~3 s while the system records feature vectors. Supports head-pose-aware
+grid adjustment for non-standard camera angles.
 """
 
 import logging
-import math
 import tkinter as tk
 from typing import Callable, Optional
 
 import numpy as np
 
-from gaze.features import extract_gaze_features, estimate_head_pose
+import random
+
+from gaze.features import extract_gaze_features
+from phrase_board.ui import HEADER_H, STATUS_H, GRID_PAD_X, GRID_PAD_TOP
 
 logger = logging.getLogger(__name__)
 
 GRID_COLS = 3
 GRID_ROWS = 2
 
-SAMPLES_PER_POINT = 40       # ↑ from 25 — more data → better Ridge fit
-SETTLE_TIME_MS = 800         # time to fixate before recording
-POINT_DISPLAY_MS = 2200      # settle + record + gap, used for the time estimate
-DOT_RADIUS = 20
+SAMPLES_PER_POINT = 30       # ~1.0 s at 30 fps
+CALIBRATION_ROUNDS = 1       # set to 2 for best accuracy (+~13 s): every point shown twice, second round shuffled
+MIN_KEEP = 10                # min clean samples per point after filtering
+SETTLE_TIME_MS = 1000        # time to fixate before recording (was 1500)
+POINT_DISPLAY_MS = 2300      # settle + record + gap, used for the time estimate
+DOT_RADIUS = 22
 PADDING_FRAC = 0.12          # fraction of canvas edge used as padding
-AUG_NOISE_STD = 0.008        # Gaussian noise σ for feature augmentation
-AUG_COPIES = 2               # number of augmented copies per real sample
-MAX_POSE_DEV = 15.0          # degrees — drop samples with pose > this from mean
-
-
-# ── Theme ─────────────────────────────────────────────────────────────
-BG       = "#0B0F1A"
-TEXT     = "#F0F4FC"
-MUTED    = "#6B7FA0"
-TRACK    = "#131B2E"
-ACCENT   = "#4FC3F7"
-SUCCESS  = "#66BB6A"
-WARM     = "#FFB74D"
-FONT     = "Segoe UI"
 
 
 class CalibrationScreen:
@@ -80,21 +65,22 @@ class CalibrationScreen:
         self._current_point = 0
         self._collecting = False
         self._point_samples: list[np.ndarray] = []
-        self._point_poses: list[tuple[float, float, float]] = []
 
         self._frame: Optional[tk.Frame] = None
         self._canvas: Optional[tk.Canvas] = None
         self._points: list[tuple[int, int]] = []
+        self._point_zones: list[int] = []
         self._after_ids: list[str] = []
 
     # ── public ────────────────────────────────────────────────────────
 
     def start(self):
         """Build the calibration frame inside the parent window and begin."""
-        self._frame = tk.Frame(self._parent, bg=BG)
+        self._frame = tk.Frame(self._parent, bg="#0F172A")
         self._frame.pack(fill="both", expand=True)
 
-        # Use the parent's actual current size once it's laid out
+        # Use the parent's actual current size once it's laid out, falling
+        # back to the constructor defaults if it isn't mapped yet.
         self._parent.update_idletasks()
         w = self._parent.winfo_width()
         h = self._parent.winfo_height()
@@ -105,7 +91,7 @@ class CalibrationScreen:
             self._frame,
             width=self._canvas_w,
             height=self._canvas_h,
-            bg=BG,
+            bg="#0F172A",
             highlightthickness=0,
         )
         self._canvas.pack(fill="both", expand=True)
@@ -138,104 +124,86 @@ class CalibrationScreen:
     # ── grid computation (head-pose aware) ────────────────────────────
 
     def _compute_grid(self):
-        """Compute 6-point (3x2) grid positions, adjusted for head pose if possible."""
+        """Put each dot on the CENTRE of the tile it trains.
+
+        The old grid used 12% screen padding, so the top dots sat near the
+        header and the bottom dots near the status bar — far from where the
+        tiles actually are — and it also shifted dots by head pose. The
+        model then learned the wrong eye positions for each tile, which is
+        why the rows got mixed up. Now the dots use the phrase board's own
+        layout constants, so calibration == what the user will look at.
+        """
         w, h = self._canvas_w, self._canvas_h
-        px = int(w * PADDING_FRAC)
-        py = int(h * PADDING_FRAC)
+        gx0, gx1 = GRID_PAD_X, w - GRID_PAD_X
+        gy0, gy1 = HEADER_H + GRID_PAD_TOP, h - STATUS_H
+        cols = [int(gx0 + (gx1 - gx0) * (c + 0.5) / GRID_COLS) for c in range(GRID_COLS)]
+        rows = [int(gy0 + (gy1 - gy0) * (r + 0.5) / GRID_ROWS) for r in range(GRID_ROWS)]
+        base = [(c, r) for r in rows for c in cols]          # zone = index
 
-        cols = [px, w // 2, w - px]      # 3 columns
-        rows = [py, h - py]              # 2 rows
+        self._points, self._point_zones = [], []
+        for rnd in range(CALIBRATION_ROUNDS):
+            order = list(range(len(base)))
+            if rnd > 0:
+                random.shuffle(order)   # different approach direction each round
+            for z in order:
+                self._points.append(base[z])
+                self._point_zones.append(z)
 
-        try:
-            frame = self._perception.get_current_frame()
-            if frame.face_detected and frame.landmarks:
-                pitch, yaw, _ = estimate_head_pose(
-                    frame.landmarks, frame.frame_width, frame.frame_height
-                )
-                x_shift = int(np.clip(yaw * 3, -px // 2, px // 2))
-                y_shift = int(np.clip(-pitch * 3, -py // 2, py // 2))
-                cols = [c + x_shift for c in cols]
-                rows = [r + y_shift for r in rows]
-                logger.info(
-                    "Head-pose calibration offset: yaw=%.1f° pitch=%.1f° → "
-                    "shift (%d, %d)px", yaw, pitch, x_shift, y_shift,
-                )
-        except Exception as e:
-            logger.debug("Head-pose grid adjustment skipped: %s", e)
+    # ── theme ─────────────────────────────────────────────────────────
 
-        self._points = [(c, r) for r in rows for c in cols]
-
-    # ── drawing helpers ───────────────────────────────────────────────
+    BG = "#0F172A"
+    TEXT = "#F1F5F9"
+    MUTED = "#94A3B8"
+    TRACK = "#1E293B"
+    ACCENT = "#38BDF8"
+    SUCCESS = "#34D399"
+    FONT = "Segoe UI"
 
     def _draw_progress(self, done_fraction: float):
         """Overall progress bar pinned to the bottom of the screen."""
         w, h = self._canvas_w, self._canvas_h
-        bar_w = min(480, int(w * 0.45))
+        bar_w = min(520, int(w * 0.5))
         x0 = (w - bar_w) // 2
-        y = h - 52
-
-        # Track
-        self._canvas.create_rectangle(x0, y, x0 + bar_w, y + 6,
-                                      fill=TRACK, outline="")
-        # Fill
-        self._canvas.create_rectangle(x0, y, x0 + int(bar_w * done_fraction), y + 6,
-                                      fill=ACCENT, outline="")
-        # Label
+        y = h - 48
+        self._canvas.create_rectangle(x0, y, x0 + bar_w, y + 8,
+                                      fill=self.TRACK, outline="")
+        self._canvas.create_rectangle(x0, y, x0 + int(bar_w * done_fraction), y + 8,
+                                      fill=self.ACCENT, outline="")
         self._canvas.create_text(
-            w // 2, y - 18,
+            w // 2, y - 20,
             text=f"Point {min(self._current_point + 1, len(self._points))} of {len(self._points)}",
-            fill=MUTED, font=(FONT, 12),
+            fill=self.MUTED, font=(self.FONT, 13),
         )
 
-    def _draw_target(self, x, y, colour, ring_extent: float = 0.0,
-                     pulse: bool = False):
-        """Target dot with outer ring and optional progress arc."""
+    def _draw_target(self, x, y, colour, ring_extent: float = 0.0):
+        """Target dot with a soft halo and an optional progress ring."""
         r = DOT_RADIUS
-
-        # Outer ring (track)
-        ring_r = r * 2.4
-        self._canvas.create_oval(x - ring_r, y - ring_r, x + ring_r, y + ring_r,
-                                 outline=TRACK, width=5)
-        # Progress arc
+        self._canvas.create_oval(x - r * 2.2, y - r * 2.2, x + r * 2.2, y + r * 2.2,
+                                 outline=self.TRACK, width=6)
         if ring_extent > 0:
-            self._canvas.create_arc(x - ring_r, y - ring_r, x + ring_r, y + ring_r,
+            self._canvas.create_arc(x - r * 2.2, y - r * 2.2, x + r * 2.2, y + r * 2.2,
                                     start=90, extent=-360 * ring_extent,
-                                    style="arc", outline=colour, width=5)
-
-        # Soft halo glow
-        glow_r = r * 1.6
-        self._canvas.create_oval(x - glow_r, y - glow_r, x + glow_r, y + glow_r,
-                                 fill="#0D2A40" if colour == ACCENT else "#1A2010",
-                                 outline="")
-
-        # Main dot
-        self._canvas.create_oval(x - r, y - r, x + r, y + r,
-                                 fill=colour, outline="")
-        # Center pinhole
-        self._canvas.create_oval(x - 3, y - 3, x + 3, y + 3,
-                                 fill=BG, outline="")
+                                    style="arc", outline=colour, width=6)
+        self._canvas.create_oval(x - r, y - r, x + r, y + r, fill=colour, outline="")
+        self._canvas.create_oval(x - 4, y - 4, x + 4, y + 4, fill=self.BG, outline="")
 
     # ── sequence ──────────────────────────────────────────────────────
 
     def _show_instruction(self):
-        self._canvas.configure(bg=BG)
+        self._canvas.configure(bg=self.BG)
         self._canvas.delete("all")
         cx, cy = self._canvas_w // 2, self._canvas_h // 2
-
-        self._canvas.create_text(cx, cy - 70, text="👁",
-                                 fill=TEXT, font=("Segoe UI Emoji", 42))
-        self._canvas.create_text(cx, cy - 10, text="Eye Calibration",
-                                 fill=TEXT, font=(FONT, 30, "bold"))
+        self._canvas.create_text(cx, cy - 60, text="Eye Calibration",
+                                 fill=self.TEXT, font=(self.FONT, 34, "bold"))
         self._canvas.create_text(
-            cx, cy + 40,
-            text="Follow the dot with your eyes only.\nKeep your head still and relaxed.",
-            fill=MUTED, font=(FONT, 15), justify="center",
+            cx, cy + 5,
+            text="Keep your head still and follow the dot\nwith your EYES only. Try not to blink.",
+            fill=self.MUTED, font=(self.FONT, 18), justify="center",
         )
-        n_points = GRID_COLS * GRID_ROWS
+        n_points = len(self._points)
         est = 2 + n_points * POINT_DISPLAY_MS // 1000
-        self._canvas.create_text(cx, cy + 100,
-                                 text=f"{n_points} points  ·  ~{est} seconds",
-                                 fill=ACCENT, font=(FONT, 13))
+        self._canvas.create_text(cx, cy + 75, text=f"{n_points} points  ·  about {est} seconds",
+                                 fill=self.ACCENT, font=(self.FONT, 14))
         self._after(2000, self._next_point)
 
     def _next_point(self):
@@ -244,10 +212,9 @@ class CalibrationScreen:
             return
         x, y = self._points[self._current_point]
         self._canvas.delete("all")
-        self._draw_target(x, y, MUTED)
+        self._draw_target(x, y, self.MUTED)
         self._draw_progress(self._current_point / len(self._points))
         self._point_samples = []
-        self._point_poses = []
         self._after(SETTLE_TIME_MS, self._start_collecting)
 
     def _start_collecting(self):
@@ -262,7 +229,7 @@ class CalibrationScreen:
         x, y = self._points[self._current_point]
         frac = len(self._point_samples) / SAMPLES_PER_POINT
         self._canvas.delete("all")
-        self._draw_target(x, y, ACCENT, ring_extent=frac)
+        self._draw_target(x, y, self.ACCENT, ring_extent=frac)
         self._draw_progress((self._current_point + frac) / len(self._points))
 
     def _collect_sample(self):
@@ -276,11 +243,7 @@ class CalibrationScreen:
                 feats = extract_gaze_features(
                     frame.landmarks, frame.frame_width, frame.frame_height
                 )
-                pose = estimate_head_pose(
-                    frame.landmarks, frame.frame_width, frame.frame_height
-                )
                 self._point_samples.append(feats)
-                self._point_poses.append(pose)
             except Exception as e:
                 logger.debug("Feature extraction error: %s", e)
 
@@ -291,69 +254,59 @@ class CalibrationScreen:
             self._save_point_data()
             x, y = self._points[self._current_point]
             self._canvas.delete("all")
-            self._draw_target(x, y, SUCCESS, ring_extent=1.0)
+            self._draw_target(x, y, self.SUCCESS, ring_extent=1.0)
             self._current_point += 1
             self._draw_progress(self._current_point / len(self._points))
-            self._after(200, self._next_point)
+            self._after(250, self._next_point)
         else:
             self._after(33, self._collect_sample)  # ~30 Hz
 
     def _save_point_data(self):
-        """Map collected features to a zone label, with outlier rejection
-        and data augmentation for better classifier generalisation."""
+        """Clean this point's samples, then store them with their zone label.
+
+        1. Drop blink / half-closed frames (EAR well below this point's
+           median) — iris landmarks are garbage when the lid covers them.
+        2. Drop outliers (glance away, landmark glitch) using the median
+           absolute deviation of the both-eye gaze features.
+        """
         if not self._point_samples:
             return
 
         idx = self._current_point
-        zone = idx  # 0-5, same order as tile positions
+        zone = self._point_zones[idx]
+        S = np.array(self._point_samples)
+        n_raw = len(S)
 
-        samples = np.array(self._point_samples)
-        poses = np.array(self._point_poses)   # (N, 3)
+        ear = S[:, 11:13].mean(axis=1)
+        clean = S[ear >= 0.8 * np.median(ear)]
 
-        # ── Outlier rejection: drop samples where head pose deviates
-        # too far from the median of this point's collection window.
-        if len(poses) > 5:
-            median_pose = np.median(poses, axis=0)
-            deviation = np.linalg.norm(poses - median_pose, axis=1)
-            mask = deviation < MAX_POSE_DEV
-            n_before = len(samples)
-            samples = samples[mask]
-            n_dropped = n_before - len(samples)
-            if n_dropped > 0:
-                logger.info("Point %d: dropped %d/%d outlier samples",
-                            idx, n_dropped, n_before)
+        if len(clean) >= MIN_KEEP:
+            key = clean[:, 19:21]                       # h_mean, v_mean
+            med = np.median(key, axis=0)
+            mad = np.median(np.abs(key - med), axis=0) * 1.4826 + 1e-6
+            clean = clean[np.all(np.abs(key - med) <= 3.0 * mad, axis=1)]
 
-        # ── Save real samples
-        for feat in samples:
+        if len(clean) < MIN_KEEP:
+            logger.warning("Point %d: only %d clean samples, keeping all %d",
+                           idx, len(clean), n_raw)
+            clean = S
+
+        for feat in clean:
             self._features.append(feat)
             self._quad_labels.append(zone)
             self._zone_labels.append(zone)
 
-        # ── Data augmentation: add small Gaussian noise copies
-        # This helps Ridge / MLP generalise beyond the exact calibration
-        # conditions (tiny head shifts, lighting changes).
-        for feat in samples:
-            for _ in range(AUG_COPIES):
-                noise = np.random.normal(0, AUG_NOISE_STD, feat.shape)
-                aug_feat = feat + noise
-                self._features.append(aug_feat)
-                self._quad_labels.append(zone)
-                self._zone_labels.append(zone)
-
-        total = len(samples) * (1 + AUG_COPIES)
-        logger.info(
-            "Point %d: %d real + %d augmented = %d samples → zone=%d",
-            idx, len(samples), len(samples) * AUG_COPIES, total, zone,
-        )
+        logger.info("Point %d: %d/%d samples kept -> zone=%d",
+                    idx, len(clean), n_raw, zone)
 
     def _finish(self):
         """Calibration complete — pass data to callback."""
         self._canvas.delete("all")
-        cx, cy = self._canvas_w // 2, self._canvas_h // 2
-        self._canvas.create_text(cx, cy - 20, text="✓",
-                                 fill=SUCCESS, font=(FONT, 48, "bold"))
-        self._canvas.create_text(cx, cy + 30, text="Calibration Complete",
-                                 fill=SUCCESS, font=(FONT, 24, "bold"))
+        self._canvas.create_text(
+            self._canvas_w // 2, self._canvas_h // 2,
+            text="✓  Calibration complete",
+            fill=self.SUCCESS, font=(self.FONT, 30, "bold"),
+        )
 
         features = np.array(self._features)
         quad_labels = np.array(self._quad_labels)

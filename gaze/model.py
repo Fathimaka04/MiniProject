@@ -1,254 +1,131 @@
 """
-GazeAssist - Gaze MLP for zone prediction with Ridge Regression fallback.
+GazeAssist - Gaze predictor (2-D Ridge REGRESSION onto the tile grid).
 
-Predicts one of 6 zones directly, matching the phrase board's 3-column x
-2-row tile grid 1:1 (zone id == tile grid index) — no quadrant/sub-zone
-translation layer.
+Why regression instead of a 6-class classifier
+───────────────────────────────────────────────
+The old RidgeClassifier treated the 6 tiles as unrelated labels. But the
+tiles sit on a grid: "between tile 0 and tile 1" is a real, meaningful
+place. Regressing a continuous (column, row) gaze point and then picking
+the nearest tile centre:
+  * uses the grid geometry (one horizontal + one vertical model instead of
+    six one-vs-rest boundaries) -> far fewer ways to overfit on ~180 samples
+  * gives a continuous point we can smooth (One-Euro filter) and apply
+    boundary hysteresis to (see gaze/smoothing.py) -> no zone flicker
+  * lets us measure calibration quality in "tile widths" of error
 
-Accuracy improvements:
-  * Ridge alpha tuned to 0.5 (less regularisation — works better with the
-    augmented + weighted calibration data)
-  * Prediction smoothing: exponential moving average over recent predictions
-    avoids single-frame glitches without adding heavy latency
+Public API unchanged: calibrate(features, quad_labels, zone_labels),
+predict_zone(features), is_calibrated. New: predict_point(features).
 """
 
 import logging
-from enum import IntEnum
 from typing import Optional
-from collections import deque
 
 import numpy as np
-from gaze.features import weight_gaze_features
+
+from gaze.features import weight_gaze_features, N_FEATURES
+
+logger = logging.getLogger(__name__)
 
 try:
-    from sklearn.linear_model import RidgeClassifier
+    from sklearn.linear_model import Ridge
     from sklearn.preprocessing import StandardScaler
     SKLEARN_OK = True
 except ImportError:
     SKLEARN_OK = False
+    logger.error("scikit-learn is not installed — run `pip install scikit-learn`.")
 
-try:
-    import tensorflow as tf
-    from tensorflow import keras
-    TF_OK = True
-except ImportError:
-    TF_OK = False
+GRID_COLS = 3
+GRID_ROWS = 2
+N_ZONES = GRID_COLS * GRID_ROWS
 
-logger = logging.getLogger(__name__)
-
-if not SKLEARN_OK:
-    logger.error(
-        "scikit-learn is not installed/importable — gaze calibration will "
-        "silently do nothing until it's installed (`pip install scikit-learn`)."
-    )
-
-N_FEATURES = 17
-N_ZONES = 6  # matches the 3-col x 2-row tile grid, one class per tile slot
+# zone id -> (col, row) centre, row-major, same order as the tile grid
+ZONE_CENTERS = np.array(
+    [[c, r] for r in range(GRID_ROWS) for c in range(GRID_COLS)], dtype=np.float64
+)
 
 
-class GazeZone(IntEnum):
-    NONE = -1
+def point_to_zone(point) -> int:
+    """Nearest tile centre for a continuous (col, row) gaze point."""
+    d = np.sum((ZONE_CENTERS - np.asarray(point, dtype=np.float64)) ** 2, axis=1)
+    return int(np.argmin(d))
 
-
-# ── Ridge Regression baseline ────────────────────────────────────────
-
-class RidgeGazePredictor:
-    """Scikit-learn Ridge classifier — works with very few calibration samples."""
-
-    def __init__(self):
-        self._scaler = StandardScaler() if SKLEARN_OK else None
-        self._quad_model = RidgeClassifier(alpha=0.5) if SKLEARN_OK else None
-        self._zone_model = RidgeClassifier(alpha=0.5) if SKLEARN_OK else None
-        self._calibrated = False
-
-    def calibrate(self, features: np.ndarray, quad_labels: np.ndarray,
-                  zone_labels: Optional[np.ndarray] = None):
-        """
-        Fit on calibration data.
-
-        Args:
-            features:    (N, 17)
-            quad_labels: (N,) ints 0-5
-            zone_labels: (N,) ints 0-5  (optional, for fine zones)
-        """
-        if not SKLEARN_OK:
-            logger.error("scikit-learn not available")
-            return
-        features = weight_gaze_features(features)
-        X = self._scaler.fit_transform(features)
-        self._quad_model.fit(X, quad_labels)
-        if zone_labels is not None and len(np.unique(zone_labels)) > 1:
-            self._zone_model.fit(X, zone_labels)
-        self._calibrated = True
-        logger.info("Ridge gaze model calibrated on %d samples", len(features))
-
-    def predict_quadrant(self, features: np.ndarray) -> int:
-        if not self._calibrated:
-            return int(GazeZone.NONE)
-        features = weight_gaze_features(features)
-        X = self._scaler.transform(features.reshape(1, -1))
-        return int(self._quad_model.predict(X)[0])
-
-    def predict_zone(self, features: np.ndarray) -> int:
-        if not self._calibrated:
-            return int(GazeZone.NONE)
-        features = weight_gaze_features(features)
-        X = self._scaler.transform(features.reshape(1, -1))
-        return int(self._zone_model.predict(X)[0])
-
-    def predict_zone_proba(self, features: np.ndarray) -> np.ndarray:
-        """Return decision function scores (not true probabilities) for
-        all zones — used by the EMA smoother in GazePredictor."""
-        if not self._calibrated:
-            return np.zeros(N_ZONES)
-        features = weight_gaze_features(features)
-        X = self._scaler.transform(features.reshape(1, -1))
-        scores = self._zone_model.decision_function(X)
-        if scores.ndim == 1:
-            return scores
-        return scores[0]
-
-    @property
-    def is_calibrated(self) -> bool:
-        return self._calibrated
-
-
-# ── MLP gaze predictor ───────────────────────────────────────────────
-
-class MLPGazePredictor:
-    """TensorFlow/Keras MLP gaze predictor — more accurate with enough data."""
-
-    def __init__(self):
-        self._quad_model = None
-        self._zone_model = None
-        self._scaler = StandardScaler() if SKLEARN_OK else None
-        self._calibrated = False
-
-    def _build_model(self, n_classes: int):
-        model = keras.Sequential([
-            keras.layers.Input(shape=(N_FEATURES,)),
-            keras.layers.Dense(64, activation="relu"),
-            keras.layers.Dropout(0.3),
-            keras.layers.Dense(32, activation="relu"),
-            keras.layers.Dense(n_classes, activation="softmax"),
-        ])
-        model.compile(
-            optimizer=keras.optimizers.Adam(learning_rate=0.001),
-            loss="sparse_categorical_crossentropy",
-            metrics=["accuracy"],
-        )
-        return model
-
-    def calibrate(self, features: np.ndarray, quad_labels: np.ndarray,
-                  zone_labels: Optional[np.ndarray] = None, epochs: int = 100):
-        if not TF_OK or not SKLEARN_OK:
-            logger.error("TensorFlow/sklearn not available for MLP gaze")
-            return
-
-        features = weight_gaze_features(features)
-        X = self._scaler.fit_transform(features).astype(np.float32)
-
-        self._quad_model = self._build_model(N_ZONES)
-        self._quad_model.fit(X, quad_labels, epochs=epochs, verbose=0, batch_size=8)
-
-        if zone_labels is not None and len(np.unique(zone_labels)) > 1:
-            self._zone_model = self._build_model(N_ZONES)
-            self._zone_model.fit(X, zone_labels, epochs=epochs, verbose=0, batch_size=8)
-
-        self._calibrated = True
-        logger.info("MLP gaze model calibrated on %d samples", len(features))
-
-    def predict_quadrant(self, features: np.ndarray) -> int:
-        if not self._calibrated or self._quad_model is None:
-            return int(GazeZone.NONE)
-        features = weight_gaze_features(features)
-        X = self._scaler.transform(features.reshape(1, -1)).astype(np.float32)
-        probs = self._quad_model.predict(X, verbose=0)[0]
-        return int(np.argmax(probs))
-
-    def predict_zone(self, features: np.ndarray) -> int:
-        if not self._calibrated or self._zone_model is None:
-            return self.predict_quadrant(features)
-        features = weight_gaze_features(features)
-        X = self._scaler.transform(features.reshape(1, -1)).astype(np.float32)
-        probs = self._zone_model.predict(X, verbose=0)[0]
-        return int(np.argmax(probs))
-
-    @property
-    def is_calibrated(self) -> bool:
-        return self._calibrated
-
-
-# ── Unified interface ────────────────────────────────────────────────
 
 class GazePredictor:
-    """
-    Unified gaze predictor with temporal smoothing.
+    """Ridge regression: 21 eye features -> (col, row) on the 3x2 grid."""
 
-    Uses an exponential moving average (EMA) over Ridge decision-function
-    scores to stabilise predictions.  This is superior to simple majority
-    voting because it:
-      * weighs recent frames more than old ones (lower latency)
-      * is less susceptible to brief single-frame glitches
-      * works with continuous scores, not just discrete votes
-    """
+    def __init__(self, alpha: float = 1.0):
+        self._alpha = alpha
+        self._scaler = StandardScaler() if SKLEARN_OK else None
+        self._reg = Ridge(alpha=alpha) if SKLEARN_OK else None
+        self._calibrated = False
+        self._gain = np.ones(2)
+        self._offset = np.zeros(2)
+        self.last_accuracy: Optional[float] = None
 
-    EMA_ALPHA = 0.35  # higher = more responsive, lower = more stable
-
-    def __init__(self):
-        self._ridge = RidgeGazePredictor() if SKLEARN_OK else None
-        # MLP disabled: with only calibration-time data, Ridge is more robust
-        self._mlp = None
-        self._use_mlp = False
-        # EMA score accumulator
-        self._ema_scores: Optional[np.ndarray] = None
+    def _prep(self, features: np.ndarray, fit: bool = False) -> np.ndarray:
+        F = np.atleast_2d(np.asarray(features, dtype=np.float64))
+        if F.shape[1] != N_FEATURES:
+            raise ValueError(f"expected {N_FEATURES} features, got {F.shape[1]}")
+        X = self._scaler.fit_transform(F) if fit else self._scaler.transform(F)
+        # Weights AFTER scaling so they actually change the model.
+        return weight_gaze_features(X)
 
     def calibrate(self, features: np.ndarray, quad_labels: np.ndarray,
-                  zone_labels: Optional[np.ndarray] = None):
-        """Calibrate both predictors; prefer MLP if available."""
-        self._ema_scores = None  # reset smoother on recalibration
-        if self._ridge:
-            self._ridge.calibrate(features, quad_labels, zone_labels)
+                  zone_labels: Optional[np.ndarray] = None) -> Optional[float]:
+        if not SKLEARN_OK:
+            logger.error("scikit-learn not available — cannot calibrate gaze")
+            return None
 
-        if self._mlp:
-            try:
-                self._mlp.calibrate(features, quad_labels, zone_labels)
-                self._use_mlp = True
-            except Exception as e:
-                logger.warning("MLP calibration failed, using Ridge: %s", e)
-                self._use_mlp = False
+        labels = np.asarray(zone_labels if zone_labels is not None else quad_labels,
+                            dtype=int)
+        targets = ZONE_CENTERS[labels]
+        X = self._prep(features, fit=True)
+        self._reg.fit(X, targets)
 
-    def predict_quadrant(self, features: np.ndarray) -> int:
-        if self._use_mlp and self._mlp and self._mlp.is_calibrated:
-            return self._mlp.predict_quadrant(features)
-        if self._ridge and self._ridge.is_calibrated:
-            return self._ridge.predict_quadrant(features)
-        return int(GazeZone.NONE)
+        # Ridge shrinks predictions toward the screen centre, which puts
+        # corner/edge tiles close to tile borders -> flicker. Fit a simple
+        # per-axis linear correction so calibration predictions land back
+        # on the tile centres.
+        raw = self._reg.predict(X)
+        self._gain = np.ones(2)
+        self._offset = np.zeros(2)
+        for k in range(2):
+            if np.std(raw[:, k]) > 1e-6:
+                g, o = np.polyfit(raw[:, k], targets[:, k], 1)
+                self._gain[k], self._offset[k] = g, o
+        self._calibrated = True
+
+        # ── calibration quality report ────────────────────────────────
+        pred = raw * self._gain + self._offset
+        pred_zones = np.array([point_to_zone(p) for p in pred])
+        acc = float(np.mean(pred_zones == labels))
+        err = np.linalg.norm(pred - targets, axis=1)
+        self.last_accuracy = acc
+        logger.info("Gaze model calibrated on %d samples — fit accuracy %.0f%%, "
+                    "mean error %.2f tile", len(labels), acc * 100, float(err.mean()))
+        for z in range(N_ZONES):
+            m = labels == z
+            if m.any():
+                z_acc = float(np.mean(pred_zones[m] == z))
+                level = logging.WARNING if z_acc < 0.8 else logging.INFO
+                logger.log(level, "  zone %d: %.0f%% (mean error %.2f tile)",
+                           z, z_acc * 100, float(err[m].mean()))
+        return acc
+
+    def predict_point(self, features: np.ndarray) -> Optional[np.ndarray]:
+        """Continuous gaze point in grid units: x in [0,2], y in [0,1]."""
+        if not self._calibrated:
+            return None
+        return self._reg.predict(self._prep(features))[0] * self._gain + self._offset
 
     def predict_zone(self, features: np.ndarray) -> int:
-        """Predict gaze zone with EMA temporal smoothing."""
-        if self._use_mlp and self._mlp and self._mlp.is_calibrated:
-            return self._mlp.predict_zone(features)
+        p = self.predict_point(features)
+        return -1 if p is None else point_to_zone(p)
 
-        if self._ridge and self._ridge.is_calibrated:
-            raw_scores = self._ridge.predict_zone_proba(features)
-
-            # Initialise EMA on first call
-            if self._ema_scores is None:
-                self._ema_scores = raw_scores.copy()
-            else:
-                self._ema_scores = (
-                    self.EMA_ALPHA * raw_scores
-                    + (1 - self.EMA_ALPHA) * self._ema_scores
-                )
-            return int(np.argmax(self._ema_scores))
-
-        return int(GazeZone.NONE)
+    # kept for backwards compatibility
+    def predict_quadrant(self, features: np.ndarray) -> int:
+        return self.predict_zone(features)
 
     @property
     def is_calibrated(self) -> bool:
-        if self._use_mlp and self._mlp:
-            return self._mlp.is_calibrated
-        if self._ridge:
-            return self._ridge.is_calibrated
-        return False
+        return self._calibrated
