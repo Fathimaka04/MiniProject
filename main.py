@@ -14,6 +14,8 @@ Flow:
   7. Initialize state machine in Navigate mode
   8. Launch Tkinter main window with phrase board (Thread 2 — main thread)
 """
+from dotenv import load_dotenv
+load_dotenv()
 
 import os
 import sys
@@ -22,10 +24,6 @@ import logging
 import tkinter as tk
 from collections import deque, Counter
 from typing import Optional
-
-# ── Load .env before anything reads os.environ ────────────────────────
-from dotenv import load_dotenv
-load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 # ── Logging ───────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -48,6 +46,7 @@ from blink.classifier import BlinkClassifier
 from blink.enrollment import BlinkEnrollment
 from gaze.features import extract_gaze_features, weight_gaze_features
 from gaze.model import GazePredictor
+from gaze.smoothing import GazeSmoother
 from gaze.calibration import CalibrationScreen
 from phrase_board.tiles import Tile, get_tile_text
 from phrase_board.confirm import SelectionConfirmer
@@ -80,8 +79,7 @@ class GazeAssistApp:
         self.tts = create_tts_engine()
         self.state_machine = StateMachine(AppMode.SETUP)
         self.gaze_predictor = GazePredictor()
-        self._zone_history = deque(maxlen=10)
-        self._locked_zone = -1
+        self._gaze_smoother = GazeSmoother()
         self.blink_classifier = BlinkClassifier()
 
         # User state
@@ -211,6 +209,7 @@ class GazeAssistApp:
         """Run the 6-point gaze calibration."""
         def on_calibration_done(features, quad_labels, zone_labels):
             self.gaze_predictor.calibrate(features, quad_labels, zone_labels)
+            self._gaze_smoother.reset()
             logger.info("✓ Gaze calibration complete — %d samples", len(features))
 
             # Save calibration data
@@ -386,17 +385,11 @@ class GazeAssistApp:
                         features = extract_gaze_features(
                             frame.landmarks, frame.frame_width, frame.frame_height
                         )
-                        # predict_zone() now includes EMA temporal smoothing
-                        raw_zone = self.gaze_predictor.predict_zone(features)
-                        self._zone_history.append(raw_zone)
-                        counts = Counter(self._zone_history)
-                        candidate, candidate_count = counts.most_common(1)[0]
-                        # Lighter majority threshold (60%) since the model's
-                        # EMA smoother already filters single-frame glitches.
-                        threshold = max(1, int(len(self._zone_history) * 0.6))
-                        if candidate != self._locked_zone and candidate_count >= threshold:
-                            self._locked_zone = candidate
-                        zone = self._locked_zone
+                        # Continuous gaze point -> One-Euro smoothing ->
+                        # tile with boundary hysteresis (gaze/smoothing.py).
+                        point = self.gaze_predictor.predict_point(features)
+                        zone = self._gaze_smoother.update(point, now)
+                        raw_zone = zone
                         logger.debug("PREDICTED ZONE: raw=%s locked=%s", raw_zone, zone)
 
                         mode = self.state_machine.current_mode

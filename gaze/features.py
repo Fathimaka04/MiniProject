@@ -2,7 +2,7 @@
 GazeAssist - Geometric feature extraction from MediaPipe Face Mesh landmarks.
 
 Extracts iris positions, eye-corner ratios, head-pose angles, and eye openness
-into a compact feature vector consumed by the gaze MLP / Ridge predictor.
+into a compact feature vector consumed by the gaze regression predictor.
 
 **Head-pose invariance** — The primary design goal is that the feature vector
 should be stable when the user is looking at the same screen zone but their
@@ -43,35 +43,41 @@ CANONICAL_3D = np.array([
     (150.0, -150.0, -125.0),
 ], dtype=np.float64)
 
+# Eyelid mid-points (upper, lower) — used for a much more reliable
+# VERTICAL gaze signal than distance from the corner-to-corner line.
+RIGHT_LID_UP, RIGHT_LID_DOWN = 159, 145
+LEFT_LID_UP, LEFT_LID_DOWN = 386, 374
+
 # EAR indices (shared with blink/ear.py)
 RIGHT_EYE_EAR = [33, 160, 158, 133, 153, 144]
 LEFT_EYE_EAR = [263, 387, 385, 362, 380, 373]
 
 # ── Feature-importance weights ───────────────────────────────────────
-# 17-element weight vector.
+# 21-element weight vector, applied AFTER StandardScaler (see gaze/model.py).
 #
-# Head-pose-compensated iris positions (indices 13-16) are the most
-# reliable gaze signal under head movement and get the highest weight.
-# Raw iris positions (0-3) are down-weighted since they shift with head
-# motion.  Head pose (8-10) is a useful secondary signal.  EAR (11-12)
-# is informational, not directional.
+# NOTE: the old code multiplied weights in BEFORE StandardScaler, which
+# divides every column by its std — so the weights cancelled out and did
+# nothing. They now act as a real prior on the Ridge model.
+#
+# The user keeps their head still and moves only their EYES, so the eye
+# signals (lid-relative vertical position, both-eye averages) get the most
+# weight and head pose is kept low — otherwise tiny head jitter during
+# calibration gets learned as if it were gaze.
 FEATURE_WEIGHTS = np.array([
-    0.4, 0.4, 0.4, 0.4,     # raw iris normalised position      [0-3]
-    1.2, 1.2, 1.2, 1.2,     # iris-corner dist ratios            [4-7]
-    5.0, 4.0, 1.5,           # pitch, yaw, roll                   [8-10]
-    0.3, 0.3,                # EAR (right, left)                  [11-12]
-    6.0, 6.0, 6.0, 6.0,     # head-pose-compensated iris pos     [13-16]
+    0.5, 0.5, 0.5, 0.5,      # raw iris position (rx, ry, lx, ly)      [0-3]
+    0.5, 0.5, 0.5, 0.5,      # iris-corner distance ratios             [4-7]
+    0.5, 0.5, 0.25,          # head pitch, yaw, roll                   [8-10]
+    0.25, 0.25,              # EAR (right, left)                       [11-12]
+    1.0, 1.0, 1.0, 1.0,      # head-pose-compensated iris              [13-16]
+    1.5, 1.5,                # iris between upper/lower lid (r, l)     [17-18]
+    2.5, 2.5,                # both-eye average horizontal / vertical  [19-20]
 ], dtype=np.float64)
+
+N_FEATURES = len(FEATURE_WEIGHTS)
 
 
 def weight_gaze_features(features: np.ndarray) -> np.ndarray:
-    """Apply per-feature importance weights before scaling/training.
-
-    Works for both single vectors (17,) and batches (N, 17).
-    Multiplying before StandardScaler is equivalent to scaling the
-    corresponding Ridge coefficients — a standard way to inject domain
-    priors into linear classifiers.
-    """
+    """Apply per-feature importance weights (call on SCALED features)."""
     return features * FEATURE_WEIGHTS
 
 
@@ -177,6 +183,37 @@ def compute_iris_corner_distances(
     return r_out, r_in, l_out, l_in
 
 
+def compute_lid_vertical_ratio(landmarks, frame_w: int, frame_h: int) -> tuple[float, float]:
+    """Iris position between upper and lower eyelid, measured along the
+    axis perpendicular to the eye (so head roll doesn't distort it).
+
+    0 = at the upper lid, 1 = at the lower lid. Looking down also lowers
+    the upper lid, which moves this ratio in the same direction — so it's
+    a strong vertical-gaze signal (the hardest axis for webcam trackers).
+    """
+    def _ratio(iris_idx, outer_idx, inner_idx, up_idx, down_idx):
+        iris = _lm_px(landmarks[iris_idx], frame_w, frame_h)
+        outer = _lm_px(landmarks[outer_idx], frame_w, frame_h)
+        inner = _lm_px(landmarks[inner_idx], frame_w, frame_h)
+        up = _lm_px(landmarks[up_idx], frame_w, frame_h)
+        down = _lm_px(landmarks[down_idx], frame_w, frame_h)
+        axis = inner - outer
+        n = np.linalg.norm(axis)
+        if n < 1e-6:
+            return 0.5
+        normal = np.array([-axis[1], axis[0]]) / n
+        span = float(np.dot(down - up, normal))
+        if abs(span) < 1e-6:
+            return 0.5
+        return float(np.dot(iris - up, normal) / span)
+
+    rv = _ratio(RIGHT_IRIS_CENTER, RIGHT_EYE_OUTER, RIGHT_EYE_INNER,
+                RIGHT_LID_UP, RIGHT_LID_DOWN)
+    lv = _ratio(LEFT_IRIS_CENTER, LEFT_EYE_OUTER, LEFT_EYE_INNER,
+                LEFT_LID_UP, LEFT_LID_DOWN)
+    return rv, lv
+
+
 def _compensate_iris_for_head_pose(
     iris: dict, pitch_deg: float, yaw_deg: float
 ) -> tuple[float, float, float, float]:
@@ -216,24 +253,31 @@ def extract_gaze_features(
     landmarks, frame_w: int, frame_h: int
 ) -> np.ndarray:
     """
-    Build the 17-element feature vector consumed by the gaze predictor.
+    Build the 21-element feature vector consumed by the gaze predictor.
 
-    Layout (17 features):
+    Layout:
         [0-3]   iris normalised position   (right_x, right_y, left_x, left_y)
         [4-7]   iris-to-corner dist ratios  (r_out, r_in, l_out, l_in)
         [8-10]  head pose                   (pitch, yaw, roll)  — degrees
         [11]    right-eye EAR
         [12]    left-eye EAR
         [13-16] head-pose-compensated iris  (right_x, right_y, left_x, left_y)
+        [17-18] iris between eyelids        (right_v, left_v)
+        [19-20] both-eye average            (horizontal, vertical)
     """
     iris = compute_iris_position(landmarks, frame_w, frame_h)
     dists = compute_iris_corner_distances(landmarks, frame_w, frame_h)
     pose = estimate_head_pose(landmarks, frame_w, frame_h)
     r_ear = _ear(landmarks, RIGHT_EYE_EAR, frame_w, frame_h)
     l_ear = _ear(landmarks, LEFT_EYE_EAR, frame_w, frame_h)
-
-    # Head-pose-compensated iris positions
     comp = _compensate_iris_for_head_pose(iris, pitch_deg=pose[0], yaw_deg=pose[1])
+    rv, lv = compute_lid_vertical_ratio(landmarks, frame_w, frame_h)
+
+    # Right eye's 0->1 runs image-left->right, left eye's runs the other
+    # way, so mirror the left eye before averaging. Averaging both eyes
+    # roughly halves landmark noise.
+    h_mean = (iris["right_x"] + (1.0 - iris["left_x"])) / 2.0
+    v_mean = (rv + lv) / 2.0
 
     return np.array([
         iris["right_x"], iris["right_y"], iris["left_x"], iris["left_y"],
@@ -241,5 +285,6 @@ def extract_gaze_features(
         pose[0], pose[1], pose[2],
         r_ear, l_ear,
         comp[0], comp[1], comp[2], comp[3],
+        rv, lv,
+        h_mean, v_mean,
     ], dtype=np.float64)
-
