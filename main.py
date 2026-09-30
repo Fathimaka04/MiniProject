@@ -13,6 +13,8 @@ Flow:
   6. Run blink enrollment if needed
   7. Initialize state machine in Navigate mode
   8. Launch Tkinter main window with phrase board (Thread 2 — main thread)
+  9. Connect to the caregiver web dashboard (caregiver_link.py — background
+     thread): heartbeats, phrases/SOS/pain, acknowledgements, messages.
 """
 from dotenv import load_dotenv
 load_dotenv()
@@ -59,12 +61,21 @@ from state_machine.modes import StateMachine, AppMode
 from tts.indic_tts import create_tts_engine
 from dashboard.app import start_dashboard, set_sos_flag
 from calibration_screens.setup_wizard import SetupWizard
+from caregiver_link import CaregiverLink, NoticeOverlay
 
 # ── Constants ─────────────────────────────────────────────────────────
 DB_PATH = os.path.join(PROJECT_ROOT, "gazeassist.db")
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 FRAME_UPDATE_MS = 33  # ~30 Hz UI update rate
 EYES_CLOSING_EAR = 0.21  # matches blink/classifier.py's ear_threshold
+
+# Spoken + shown when a caregiver acknowledges an SOS on the web dashboard.
+HELP_IS_COMING = {
+    "hi": "मदद आ रही है",
+    "ml": "സഹായം വരുന്നു",
+    "ta": "உதவி வருகிறது",
+    "te": "సహాయం వస్తోంది",
+}
 
 
 class GazeAssistApp:
@@ -104,6 +115,10 @@ class GazeAssistApp:
         self.pain_scale: Optional[PainScaleUI] = None
         self.reorderer: Optional[TileReorderer] = None
 
+        # Caregiver web dashboard link (started once the Tk root exists)
+        self.caregiver_link: Optional[CaregiverLink] = None
+        self.notices: Optional[NoticeOverlay] = None
+
     # ── Lifecycle ─────────────────────────────────────────────────────
 
     def run(self):
@@ -138,6 +153,17 @@ class GazeAssistApp:
             self.root.attributes("-zoomed", True)  # some Linux WMs use this instead
         self.root.configure(bg="#0F172A")
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        # Connect to the caregiver web dashboard. Runs on its own background
+        # thread; does nothing if GAZEASSIST_API_TOKEN is not set in .env.
+        self.notices = NoticeOverlay(self.root)
+        self.caregiver_link = CaregiverLink(
+            self.root,
+            on_status=self._on_caregiver_status,
+            on_ack=self._on_caregiver_ack,
+            on_message=self._on_caregiver_message,
+        )
+        self.caregiver_link.start()
 
         # Hide the main window until it actually has content (setup wizard /
         # calibration run in their own window first) — otherwise an empty
@@ -439,7 +465,11 @@ class GazeAssistApp:
         # Selecting an EMERGENCY tile fires the same alert system that
         # used to be triggered by 3 long blinks.
         if getattr(tile, "is_emergency", False):
-            self._on_sos_trigger(reason=text)
+            self._on_sos_trigger(reason=text, dashboard_phrase=tile.text)
+        elif self.caregiver_link:
+            # English tile text, so the dashboard's phrase statistics are
+            # the same whatever language the patient uses.
+            self.caregiver_link.submit_request(tile.text)
 
     def _on_pain_confirmed(self, level: int):
         """Handle confirmed pain level — speak + log."""
@@ -459,6 +489,9 @@ class GazeAssistApp:
 
         if self.session_id:
             self.db.log_pain(self.session_id, level)
+
+        if self.caregiver_link:
+            self.caregiver_link.submit_request(f"Pain level {level}", pain_level=level)
 
         logger.info("Pain level: %d", level)
 
@@ -480,12 +513,20 @@ class GazeAssistApp:
             self.phrase_board.show()
         logger.info("Returned to navigate mode")
 
-    def _on_sos_trigger(self, reason: str = "Emergency signal"):
+    def _on_sos_trigger(self, reason: str = "Emergency signal",
+                        dashboard_phrase: Optional[str] = None):
         """Handle SOS trigger — fire all alerts."""
         logger.critical("🚨 SOS TRIGGERED! Reason: %s", reason)
 
         # Set dashboard SOS flag
         set_sos_flag()
+
+        # Caregiver web dashboard: red banner + alarm on every caregiver's
+        # screen. Queued and sent in the background (never blocks the UI).
+        if self.caregiver_link:
+            self.caregiver_link.submit_request(
+                dashboard_phrase or f"SOS – {reason}", is_emergency=True
+            )
 
         # Fire all alert channels in the background — fire_all_alerts()
         # join()s its worker threads (network calls to Meta/Fast2SMS), and
@@ -496,9 +537,54 @@ class GazeAssistApp:
             kwargs={"reason": reason}, daemon=True,
         ).start()
 
+    # ── Caregiver web dashboard callbacks (run on the Tk thread) ───────
+
+    def _speak_async(self, text: str):
+        import threading
+        threading.Thread(
+            target=lambda: self.tts.speak(text, self.language),
+            daemon=True,
+        ).start()
+
+    def _on_caregiver_status(self, connected: bool, text: str):
+        """Dashboard connection went up or down — update the corner badge."""
+        if self.notices:
+            self.notices.set_status(connected, text)
+
+    def _on_caregiver_ack(self, status: dict):
+        """A caregiver pressed Acknowledge on the web dashboard."""
+        who = status.get("acknowledged_by") or "Your caregiver"
+        if status.get("is_emergency"):
+            # Help is coming: silence the local alarm and tell the patient.
+            self.alert_system.stop_alarm()
+            spoken = HELP_IS_COMING.get(self.language, "Help is on the way")
+            if self.notices:
+                self.notices.show(spoken, f"Help is on the way — {who} saw your SOS.",
+                                  kind="help", seconds=30)
+            self._speak_async(spoken)
+            logger.info("SOS %s acknowledged by %s", status.get("id"), who)
+        else:
+            if self.notices:
+                self.notices.show("Your caregiver has seen your request",
+                                  status.get("phrase", ""), kind="info", seconds=8)
+            logger.info("Request %s seen by %s", status.get("id"), who)
+
+    def _on_caregiver_message(self, message: dict):
+        """A caregiver sent a message from the web dashboard: show and speak it."""
+        text = message.get("text", "")
+        sender = message.get("sender") or "your caregiver"
+        if self.notices:
+            self.notices.show(f"Message from {sender}", text, kind="message", seconds=25)
+        self._speak_async(text)
+        logger.info("Message from %s: %s", sender, text)
+
     def _on_close(self):
         """Clean shutdown."""
         logger.info("Shutting down...")
+
+        # Stop the dashboard link first (it uses the Tk root for callbacks)
+        if self.caregiver_link:
+            self.caregiver_link.stop()
 
         # End session
         if self.session_id:
