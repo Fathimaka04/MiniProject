@@ -4,7 +4,7 @@ GazeAssist - Arm/Confirm selection state machine.
 Shared by both the phrase board and pain scale.  Implements:
   IDLE → ARMED  (800 ms dwell OR short deliberate blink)
   ARMED → CONFIRMED  (long deliberate blink within 3 s)
-  ARMED → IDLE  (gaze away or timeout)
+  ARMED → IDLE  (gaze away for ARMED_LEAVE_GRACE_S, or timeout)
 """
 
 import time
@@ -30,6 +30,16 @@ class SelectionConfirmer:
     The confirmer manages its own state and fires callbacks on transitions.
     """
 
+    # While a tile is ARMED the predicted gaze can slide to a neighbouring
+    # tile for a moment as the eyelids start to close for the confirming
+    # long blink (half-closed lids pull the iris landmarks downward, so a
+    # top-row tile "moves" to the row below). Cancelling on the first frame
+    # away made long-blink confirmation fail for every tile except the
+    # bottom row. Now the gaze must stay away this long before the arm is
+    # cancelled. A deliberate move to another tile takes the full dwell
+    # time (>= 0.8 s) to arm it, so it still cancels the old arm first.
+    ARMED_LEAVE_GRACE_S = 0.5
+
     def __init__(
         self,
         dwell_time_ms: int = 800,
@@ -48,6 +58,7 @@ class SelectionConfirmer:
         self._armed_tile_id: Optional[str] = None
         self._armed_zone: int = -1
         self._armed_time: float = 0.0
+        self._away_since: Optional[float] = None  # when gaze left the armed tile
 
         # Dwell tracking
         self._current_zone: int = -1
@@ -74,12 +85,26 @@ class SelectionConfirmer:
                 self._zone_enter_time = timestamp
                 self._current_tile_id = tile_id
 
-                # If we were armed and gaze moved, cancel the armed state
-                if self._state == SelectionState.ARMED and zone_id != self._armed_zone:
-                    self._cancel_arm()
+                # Armed and the gaze moved: start (or clear) the grace timer
+                # instead of cancelling at once — see ARMED_LEAVE_GRACE_S.
+                if self._state == SelectionState.ARMED:
+                    if zone_id == self._armed_zone:
+                        self._away_since = None
+                    elif self._away_since is None:
+                        self._away_since = timestamp
                 return
 
             self._current_tile_id = tile_id
+
+            # Armed but looking elsewhere for longer than the grace period.
+            if (
+                self._state == SelectionState.ARMED
+                and self._away_since is not None
+                and zone_id != self._armed_zone
+                and (timestamp - self._away_since) >= self.ARMED_LEAVE_GRACE_S
+            ):
+                self._cancel_arm(reason=f"gaze moved to zone {zone_id}")
+                return
 
             # Check dwell time for arming — must be CONTINUOUS on this
             # exact zone (any zone change above resets _zone_enter_time),
@@ -96,7 +121,7 @@ class SelectionConfirmer:
                 self._state == SelectionState.ARMED
                 and (timestamp - self._armed_time) >= self._confirm_timeout
             ):
-                self._cancel_arm()
+                self._cancel_arm(reason=f"no long blink within {self._confirm_timeout:.0f} s")
 
     def on_blink(self, blink_type, timestamp: float):
         """
@@ -137,6 +162,7 @@ class SelectionConfirmer:
             self._state = SelectionState.IDLE
             self._armed_tile_id = None
             self._armed_zone = -1
+            self._away_since = None
             self._current_zone = -1
             self._current_tile_id = None
 
@@ -158,6 +184,7 @@ class SelectionConfirmer:
         self._armed_tile_id = tile_id
         self._armed_zone = zone_id
         self._armed_time = timestamp
+        self._away_since = None
         logger.info("Tile ARMED: %s", tile_id)
 
         if self._on_arm:
@@ -171,6 +198,7 @@ class SelectionConfirmer:
         self._state = SelectionState.IDLE
         self._armed_tile_id = None
         self._armed_zone = -1
+        self._away_since = None
         # Force a fresh, full dwell before anything can arm again. Without
         # this, _zone_enter_time is still from BEFORE the confirm, so the
         # tile in the same spot on the NEXT page (or the same tile again,
@@ -185,12 +213,14 @@ class SelectionConfirmer:
             except Exception as e:
                 logger.error("on_confirm callback error: %s", e)
 
-    def _cancel_arm(self):
+    def _cancel_arm(self, reason: str = ""):
         old_tile = self._armed_tile_id
         self._state = SelectionState.IDLE
         self._armed_tile_id = None
         self._armed_zone = -1
-        logger.debug("Arm cancelled (was %s)", old_tile)
+        self._away_since = None
+        # INFO (not DEBUG) so a failed selection is visible in the console.
+        logger.info("Arm cancelled: %s (%s)", old_tile, reason or "reset")
 
         if self._on_cancel:
             try:
