@@ -108,7 +108,7 @@ Caregiver accounts cannot use the API, even with a token.
 
 | Method & path | Body | Returns |
 |---|---|---|
-| `POST /api/heartbeat/` | none | `{ok, patient{id,name}, server_time, pending_messages, online_window_seconds}`. Marks the patient online. |
+| `POST /api/heartbeat/` | none | `{ok, patient{id,name}, server_time, pending_messages, online_window_seconds}`. Status check: tells the dashboard the gaze app is running, so the patient shows online (not the patient's heart rate). |
 | `POST /api/requests/` | `{"phrase": "I am thirsty", "is_emergency": false, "pain_level": null}` | `201` with the request: `{id, phrase, is_emergency, pain_level, timestamp, acknowledged, acknowledged_by, acknowledged_at, message}` |
 | `GET /api/requests/<id>/status/` | none | Same shape as above. When acknowledged, `message` is `"Help is on the way"`. |
 | `GET /api/messages/pending/` | none | `{"messages": [{id, text, sender, created_at}]}`. Each message is returned once, then marked delivered. |
@@ -136,7 +136,7 @@ Invoke-RestMethod -Uri "$base/messages/pending/" -Headers $h
 ```
 
 Keep the dashboard open while you do this. Within 3 seconds, the patient
-turns **Online** and the SOS appears under *Open alerts*. If no heartbeat
+turns **Online** and the SOS appears under *Open alerts*. If no status check
 arrives for 15 seconds, the patient shows **Offline** again.
 
 ### Live updates in the browser
@@ -258,7 +258,7 @@ freezes:
 
 | In the gaze app | On the dashboard |
 |---|---|
-| App running (heartbeat every 5 s) | Patient shows **Online** |
+| App running (status check every 5 s) | Patient shows **Online** |
 | Patient selects a phrase | Appears in the live activity feed |
 | Patient selects a pain level | Pain-level chart; the request carries `pain_level` |
 | Patient selects an emergency tile | Red SOS banner and alarm for every linked caregiver |

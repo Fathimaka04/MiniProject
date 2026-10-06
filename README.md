@@ -79,14 +79,14 @@ No special hardware: a standard webcam, no eye-tracker and no GPU.
 ```mermaid
 flowchart LR
     cam["Webcam"] --> app["Gaze app<br/>(Tkinter + MediaPipe)"]
-    app -- "heartbeat, phrases, SOS" --> api["REST API<br/>(Django REST Framework)"]
+    app -- "status check, phrases, SOS" --> api["REST API<br/>(Django REST Framework)"]
     api -- "acknowledged? messages" --> app
     api --> db[("SQLite")]
     web["Caregiver dashboard<br/>(Django)"] --> db
     browser["Caregiver's phone / laptop"] -- "live updates every 3 s" --> web
 ```
 
-1. The gaze app sends a **heartbeat every 5 seconds**. The patient shows as *Online* if one arrived within the last 15 seconds.
+1. Every 5 seconds the gaze app sends a short **status check** ("the app is running"). The patient shows as *Online* if one arrived within the last 15 seconds. This is not the patient's heart rate; GazeAssist has no medical sensors.
 2. Each selected phrase, pain level or SOS is sent to the API. If the dashboard can't be reached, it waits in a queue, and an SOS always goes first.
 3. Caregiver pages poll the server every 3 seconds and update without reloading.
 4. When a caregiver acknowledges an SOS, the gaze app's next status check returns *"Help is on the way"*, and the app shows and speaks it.
@@ -220,7 +220,7 @@ Used by the gaze app. Every call except `pair` needs `Authorization: Token <toke
 | Method | Endpoint | Purpose |
 |---|---|---|
 | POST | `/api/pair/` | Swap a one-time code for the patient's token |
-| POST | `/api/heartbeat/` | Mark the patient online |
+| POST | `/api/heartbeat/` | Status check: the gaze app is running, so the patient shows *Online* (not the patient's heart rate) |
 | POST | `/api/requests/` | Send a phrase, pain level or SOS: `{"phrase", "is_emergency", "pain_level"}` |
 | GET | `/api/requests/<id>/status/` | Has a caregiver acknowledged it? |
 | GET | `/api/messages/pending/` | Caregiver messages not yet shown |
