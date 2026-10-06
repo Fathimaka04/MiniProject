@@ -1,0 +1,34 @@
+{% comment %}
+  Body of the red SOS banner. Expects `sos_alerts` (up to 3 open emergencies) and `sos_count`.
+  Re-rendered by every live endpoint; times are absolute so the HTML only changes when alerts change.
+{% endcomment %}
+{% if sos_alerts %}
+<div class="sos-body" role="alert">
+  <div class="sos-head">
+    <span class="sos-icon" aria-hidden="true"><i class="bi bi-exclamation-octagon-fill"></i></span>
+    <div class="min-w-0">
+      <p class="sos-title">Emergency{{ sos_count|pluralize }} · {{ sos_count }} waiting for you</p>
+      <p class="sos-sub">Acknowledge so the patient sees “Help is on the way”.</p>
+    </div>
+  </div>
+  <ul class="sos-list">
+    {% for alert in sos_alerts %}
+      <li class="sos-item" data-sos-id="{{ alert.pk }}">
+        <div class="sos-item-text min-w-0">
+          <p class="sos-patient"><a href="{% url 'board:patient_activity' alert.patient_id %}">{{ alert.patient.name }}</a></p>
+          <p class="sos-phrase">“{{ alert.phrase }}” · <time datetime="{{ alert.timestamp|date:'c' }}">{{ alert.timestamp|date:"H:i" }}</time></p>
+        </div>
+        <form method="post" action="{% url 'board:request_ack' alert.pk %}" data-ack-form>
+          {% csrf_token %}
+          <button type="submit" class="btn btn-ack-sos">
+            <i class="bi bi-check2-circle" aria-hidden="true"></i> Acknowledge<span class="visually-hidden"> SOS from {{ alert.patient.name }}</span>
+          </button>
+        </form>
+      </li>
+    {% endfor %}
+  </ul>
+  {% if sos_count > sos_alerts|length %}
+    <a class="sos-more" href="{% url 'board:dashboard' %}#alerts">+ {{ sos_count|add:"-3" }} more on the dashboard</a>
+  {% endif %}
+</div>
+{% endif %}

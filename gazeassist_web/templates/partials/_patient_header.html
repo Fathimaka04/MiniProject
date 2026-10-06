@@ -1,0 +1,33 @@
+{% comment %}Patient page header: avatar, name, age, condition, online status.
+  Expects `patient`, `my_link`, `open_alerts_count`, `latest_request_id`, `live_since`.
+  The data-live-patient element starts polling the live feed endpoint (gazeassist.js).{% endcomment %}
+<section class="card-soft patient-header" aria-label="Patient summary"
+         data-live-patient="{% url 'board:live_patient_feed' patient.pk %}"
+         data-latest-id="{{ latest_request_id }}" data-since="{{ live_since }}"
+         data-interval="{{ poll_interval_ms|default:3000 }}">
+  <span class="avatar avatar-xl" style="--avatar-hue: {{ patient.avatar_hue }}" aria-hidden="true">
+    {{ patient.initials }}
+    <span class="status-dot {% if patient.is_online %}is-online{% endif %}" data-live-dot></span>
+  </span>
+  <div class="min-w-0 flex-grow-1">
+    <h2 class="patient-header-name">{{ patient.name }}</h2>
+    <div class="patient-header-meta">
+      {% if patient.age is not None %}<span>{{ patient.age }} years</span><span class="sep" aria-hidden="true">•</span>{% endif %}
+      <span>{{ patient.get_gender_display }}</span><span class="sep" aria-hidden="true">•</span>
+      <span><i class="bi bi-translate" aria-hidden="true"></i> {{ patient.language }}</span>
+    </div>
+    <div class="d-flex flex-wrap align-items-center gap-2 mt-2">
+      <span class="badge badge-soft badge-soft-teal"><i class="bi bi-heart-pulse" aria-hidden="true"></i> {{ patient.get_condition_type_display }}</span>
+      <span data-live-status>{% include "partials/_status_pill.html" %}</span>
+      {% if my_link %}<span class="badge badge-soft badge-soft-blue">You: {{ my_link.get_role_display|lower }} carer</span>{% endif %}
+    </div>
+  </div>
+  <a class="btn btn-light-soft header-message" href="{% url 'board:patient_detail' patient.pk %}#message">
+    <i class="bi bi-send" aria-hidden="true"></i> Message
+  </a>
+  <a class="header-alert" href="{% url 'board:patient_activity' patient.pk %}?filter=open"
+     data-live-alert-link {% if not open_alerts_count %}hidden{% endif %}>
+    <i class="bi bi-exclamation-octagon-fill" aria-hidden="true"></i>
+    <span><strong data-live-open-alerts>{{ open_alerts_count }}</strong> open alert<span data-live-open-alerts-plural>{{ open_alerts_count|pluralize }}</span></span>
+  </a>
+</section>

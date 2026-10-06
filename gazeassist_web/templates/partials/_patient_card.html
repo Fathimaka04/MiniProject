@@ -1,0 +1,27 @@
+{% comment %}Patient summary card. Expects `patient` (annotated with my_role, unack_alerts, requests_today).
+  data-live-* hooks are updated by gazeassist.js from /live/dashboard/.{% endcomment %}
+<article class="card-soft patient-card h-100 {% if patient.unack_alerts %}has-alert{% endif %}" data-live-patient-card="{{ patient.pk }}">
+  <div class="d-flex align-items-start gap-3">
+    <span class="avatar avatar-lg" style="--avatar-hue: {{ patient.avatar_hue }}" aria-hidden="true">
+      {{ patient.initials }}
+      <span class="status-dot {% if patient.is_online %}is-online{% endif %}" data-live-dot></span>
+    </span>
+    <div class="flex-grow-1 min-w-0">
+      <h3 class="patient-name text-truncate">
+        <a class="stretched-link" href="{% url 'board:patient_detail' patient.pk %}">{{ patient.name }}</a>
+      </h3>
+      <p class="patient-meta">
+        {% if patient.age is not None %}{{ patient.age }} yrs · {% endif %}{{ patient.get_gender_display }} · {{ patient.language }}
+      </p>
+      <div class="d-flex flex-wrap gap-1">
+        <span class="badge badge-soft badge-soft-teal">{{ patient.get_condition_type_display }}</span>
+        {% if patient.my_role == "primary" %}<span class="badge badge-soft badge-soft-blue">Primary carer</span>{% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="patient-card-footer">
+    <span data-live-status>{% include "partials/_status_pill.html" %}</span>
+    <span data-live-alerts>{% include "partials/_patient_card_alerts.html" %}</span>
+  </div>
+</article>

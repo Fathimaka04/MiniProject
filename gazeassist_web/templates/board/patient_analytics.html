@@ -1,0 +1,171 @@
+{% extends "board/patient_base.html" %}
+{% load static %}
+{% block title %}{{ patient.name }} · Analytics{% endblock %}
+
+{% block tab_content %}
+{# Filter row: one period control above everything it scopes. #}
+<div class="section-header">
+  <h3 class="section-title">Last {{ days }} days <span class="chart-period">{{ chart_data.labels|first }} – {{ chart_data.labels|last }}</span></h3>
+  <div class="segmented" role="group" aria-label="Time period">
+    {% for period in periods %}
+      <a class="segmented-item {% if period == days %}active{% endif %}" href="?days={{ period }}"
+         {% if period == days %}aria-current="true"{% endif %}>{{ period }} days</a>
+    {% endfor %}
+  </div>
+</div>
+
+<section class="row g-3 mb-4" aria-label="Key numbers">
+  <div class="col-6 col-xl-3">
+    {% include "partials/_stat_card.html" with label="Requests" value=stats.total icon="bi-chat-left-text-fill" tone="blue" hint=per_day|stringformat:"s"|add:" per day" %}
+  </div>
+  <div class="col-6 col-xl-3">
+    {% include "partials/_stat_card.html" with label="Emergencies" value=stats.emergencies icon="bi-exclamation-octagon-fill" tone="red" hint=emergency_days|stringformat:"s"|add:" days with an SOS" %}
+  </div>
+  <div class="col-6 col-xl-3">
+    {% include "partials/_stat_card.html" with label="Avg. response" value=avg_response icon="bi-stopwatch" tone="teal" hint="to acknowledge an SOS" %}
+  </div>
+  <div class="col-6 col-xl-3">
+    {% if stats.avg_pain is not None %}
+      {% include "partials/_stat_card.html" with label="Avg. pain level" value=stats.avg_pain|floatformat:1 icon="bi-thermometer-half" tone="amber" hint=stats.pain_reports|stringformat:"s"|add:" pain reports" %}
+    {% else %}
+      {% include "partials/_stat_card.html" with label="Avg. pain level" value="—" icon="bi-thermometer-half" tone="amber" hint="no pain reports" %}
+    {% endif %}
+  </div>
+</section>
+
+{% if not stats.total %}
+  <section class="card-soft">
+    {% include "partials/_empty_state.html" with icon="bi-bar-chart-line" title="No activity in this period" text="Charts appear once the gaze app sends requests. Try a longer period." %}
+  </section>
+{% else %}
+<div class="row g-4">
+
+  {# 1. Requests per day ------------------------------------------------ #}
+  <section class="col-12" aria-labelledby="chart-requests-title">
+    <div class="card-soft chart-card">
+      <div class="chart-head">
+        <h3 class="section-title" id="chart-requests-title"><i class="bi bi-bar-chart-fill section-icon" aria-hidden="true"></i>Requests per day</h3>
+        <p class="chart-sub">
+          {{ stats.total }} request{{ stats.total|pluralize }}, {{ per_day }} per day on average{% if busiest_day %} · busiest day {{ busiest_day.1|date:"j M" }} ({{ busiest_day.0 }}){% endif %}
+        </p>
+      </div>
+      <div class="chart-box chart-box-lg">
+        <canvas id="chart-requests" role="img"
+                aria-label="Column chart of requests per day over the last {{ days }} days. {{ stats.total }} in total{% if busiest_day %}; the busiest day was {{ busiest_day.1|date:'j F' }} with {{ busiest_day.0 }}{% endif %}. Use Show as table for every value."></canvas>
+      </div>
+      <details class="chart-table">
+        <summary><i class="bi bi-table" aria-hidden="true"></i> Show as table</summary>
+        <div class="table-responsive">
+          <table class="table table-sm table-striped ga-table mb-0">
+            <caption class="visually-hidden">Requests and emergencies per day</caption>
+            <thead><tr><th scope="col">Day</th><th scope="col" class="text-end">Requests</th><th scope="col" class="text-end">Emergencies</th><th scope="col" class="text-end">Avg. pain</th></tr></thead>
+            <tbody>
+              {% for row in daily_rows %}
+                <tr>
+                  <th scope="row" class="fw-normal">{{ row.day|date:"D j M" }}</th>
+                  <td class="text-end num">{{ row.requests }}</td>
+                  <td class="text-end num">{{ row.emergencies }}</td>
+                  <td class="text-end num">{% if row.pain_avg is not None %}{{ row.pain_avg }} <span class="text-body-secondary">({{ row.pain_n }})</span>{% else %}—{% endif %}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </div>
+  </section>
+
+  {# 2. Emergencies over time -------------------------------------------- #}
+  <section class="col-xl-6" aria-labelledby="chart-emergencies-title">
+    <div class="card-soft chart-card h-100">
+      <div class="chart-head">
+        <h3 class="section-title" id="chart-emergencies-title"><i class="bi bi-exclamation-octagon-fill section-icon text-alert" aria-hidden="true"></i>Emergencies over time</h3>
+        <p class="chart-sub">{{ stats.emergencies }} SOS alert{{ stats.emergencies|pluralize }} on {{ emergency_days }} day{{ emergency_days|pluralize }} · avg. response {{ avg_response }}</p>
+      </div>
+      {% if stats.emergencies %}
+        <div class="chart-box">
+          <canvas id="chart-emergencies" role="img"
+                  aria-label="Line chart of SOS alerts per day over the last {{ days }} days. {{ stats.emergencies }} in total on {{ emergency_days }} days. Use the table under the requests chart for every value."></canvas>
+        </div>
+      {% else %}
+        {% include "partials/_empty_state.html" with icon="bi-shield-check" title="No emergencies" text="No SOS alerts in this period." %}
+      {% endif %}
+    </div>
+  </section>
+
+  {# 3. Pain level trend ------------------------------------------------- #}
+  <section class="col-xl-6" aria-labelledby="chart-pain-title">
+    <div class="card-soft chart-card h-100">
+      <div class="chart-head">
+        <h3 class="section-title" id="chart-pain-title"><i class="bi bi-thermometer-half section-icon" aria-hidden="true"></i>Pain level trend</h3>
+        <p class="chart-sub">Daily average on the 0–10 scale · {{ stats.pain_reports }} report{{ stats.pain_reports|pluralize }}{% if stats.avg_pain is not None %} · overall {{ stats.avg_pain|floatformat:1 }}{% endif %}</p>
+      </div>
+      {% if stats.pain_reports %}
+        <div class="chart-box">
+          <canvas id="chart-pain" role="img"
+                  aria-label="Line chart of the daily average pain level, 0 to 10, over the last {{ days }} days. Overall average {{ stats.avg_pain|floatformat:1 }} from {{ stats.pain_reports }} reports. Days without a pain report are skipped."></canvas>
+        </div>
+        <p class="chart-note"><span class="chart-key chart-key-dot" aria-hidden="true"></span>Dots are days with at least one pain report; the line joins them across days without reports.</p>
+      {% else %}
+        {% include "partials/_empty_state.html" with icon="bi-thermometer-half" title="No pain reports" text="Pain-scale selections from the gaze app will show here." %}
+      {% endif %}
+    </div>
+  </section>
+
+  {# 4. Most-used phrases ------------------------------------------------ #}
+  <section class="col-lg-7" aria-labelledby="chart-phrases-title">
+    <div class="card-soft chart-card h-100">
+      <div class="chart-head">
+        <h3 class="section-title" id="chart-phrases-title"><i class="bi bi-chat-quote-fill section-icon" aria-hidden="true"></i>Most-used phrases</h3>
+        <p class="chart-sub">Top {{ top_phrases|length }} by number of times selected</p>
+      </div>
+      <div class="chart-box" data-bars="{{ top_phrases|length }}">
+        <canvas id="chart-phrases" role="img"
+                aria-label="Bar chart of the most-used phrases. {% for row in top_phrases %}{{ row.phrase }}: {{ row.count }}. {% endfor %}"></canvas>
+      </div>
+      <details class="chart-table">
+        <summary><i class="bi bi-table" aria-hidden="true"></i> Show as table</summary>
+        <table class="table table-sm table-striped ga-table mb-0">
+          <caption class="visually-hidden">Most-used phrases</caption>
+          <thead><tr><th scope="col">Phrase</th><th scope="col" class="text-end">Times</th></tr></thead>
+          <tbody>
+            {% for row in top_phrases %}
+              <tr><th scope="row" class="fw-normal">{{ row.phrase }}</th><td class="text-end num">{{ row.count }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </details>
+    </div>
+  </section>
+
+  {# 5. Time of day (simple bars, not a chart library) ------------------ #}
+  <section class="col-lg-5" aria-labelledby="tod-heading">
+    <div class="card-soft chart-card h-100">
+      <div class="chart-head">
+        <h3 class="section-title" id="tod-heading"><i class="bi bi-sun section-icon" aria-hidden="true"></i>Time of day</h3>
+        <p class="chart-sub">When requests are made</p>
+      </div>
+      <ol class="bar-list">
+        {% for row in time_of_day %}
+          <li>
+            <div class="bar-label"><span>{{ row.label }}</span><strong>{{ row.count }}</strong></div>
+            <div class="bar-track" aria-hidden="true"><div class="bar-fill bar-teal" style="width: {{ row.pct }}%"></div></div>
+          </li>
+        {% endfor %}
+      </ol>
+      <p class="small text-body-secondary mt-3 mb-0">Morning 6–12 · Afternoon 12–18 · Evening 18–24 · Night 0–6</p>
+    </div>
+  </section>
+</div>
+
+{{ chart_data|json_script:"analytics-data" }}
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+  {% if stats.total %}
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" 
+            integrity="sha384-NrKB+u6Ts6AtkIhwPixiKTzgSKNblyhlk0Sohlgar9UHUBzai/sgnNNWWd291xqt" crossorigin="anonymous"></script>
+    <script src="{% static 'js/analytics.js' %}"></script>
+  {% endif %}
+{% endblock %}

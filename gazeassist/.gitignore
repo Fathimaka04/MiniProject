@@ -22,3 +22,14 @@ venv/
 _alarm.wav
 log.txt
 data/users/
+
+# Caregiver dashboard pairing (encrypted token)
+data/dashboard_link.json
+data/dashboard_link.tmp
+
+# pywhatkit local log (contains phone numbers)
+PyWhatKit_DB.txt
+
+# Logs
+*.log
+logs/

@@ -1,0 +1,12 @@
+{% comment %}One sent caregiver message with its delivery state. Expects `message`.{% endcomment %}
+<li class="message-item">
+  <p class="message-text">{{ message.text }}</p>
+  <p class="message-meta">
+    {{ message.caregiver.display_name|default:"Caregiver" }} · {{ message.created_at|date:"j M, H:i" }} ·
+    {% if message.delivered %}
+      <span class="message-state is-delivered"><i class="bi bi-check2-all" aria-hidden="true"></i> Shown on screen {{ message.delivered_at|date:"H:i" }}</span>
+    {% else %}
+      <span class="message-state"><i class="bi bi-clock" aria-hidden="true"></i> Waiting for the gaze app</span>
+    {% endif %}
+  </p>
+</li>

@@ -1,0 +1,70 @@
+{% extends "board/patient_base.html" %}
+{% block title %}Connect gaze app · {{ patient.name }}{% endblock %}
+
+{% block tab_content %}
+<div class="row g-4">
+  <section class="col-lg-7" aria-labelledby="connect-heading">
+    <div class="card-soft pairing-card">
+      <h3 class="section-title mb-1" id="connect-heading"><i class="bi bi-link-45deg section-icon" aria-hidden="true"></i>Connect {{ patient.name }}'s gaze app</h3>
+      <p class="text-body-secondary mb-4">Do this once on the patient's computer. After that the gaze app connects by itself every time it starts.</p>
+
+      {% if code %}
+        {# A live code: shown once, never stored in readable form. #}
+        <div class="pairing-code-box" data-pairing
+             data-status-url="{% url 'board:device_status' patient.pk %}"
+             data-expires="{{ expires_at|date:'c' }}"
+             data-paired-before="{{ paired_at|date:'c' }}">
+          <p class="pairing-label">Connection code</p>
+          <p class="pairing-code" aria-label="Connection code {{ code|cut:' '|make_list|join:' ' }}">{{ code }}</p>
+          <p class="pairing-expiry" data-pairing-countdown>Valid for {{ ttl_minutes }} minutes</p>
+
+          <div class="pairing-status" data-pairing-status role="status" aria-live="polite">
+            <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+            Waiting for the gaze app…
+          </div>
+        </div>
+
+        <div class="pairing-done" data-pairing-done hidden>
+          <span class="modal-icon is-success"><i class="bi bi-check2-circle" aria-hidden="true"></i></span>
+          <h4 class="h5 fw-bold mb-1">Connected</h4>
+          <p class="text-body-secondary mb-3" data-pairing-device></p>
+          <a class="btn btn-primary btn-lg" href="{% url 'board:patient_detail' patient.pk %}">Go to {{ patient.name }}</a>
+        </div>
+
+        <div class="pairing-expired" data-pairing-expired hidden>
+          <p class="text-alert fw-semibold mb-2"><i class="bi bi-clock-history" aria-hidden="true"></i> This code has expired.</p>
+          <form method="post">{% csrf_token %}
+            <button type="submit" class="btn btn-primary"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Get a new code</button>
+          </form>
+        </div>
+      {% else %}
+        {% if patient.has_gaze_app %}
+          <div class="alert alert-warning-soft d-flex gap-2 align-items-start" role="note">
+            <i class="bi bi-exclamation-triangle-fill mt-1" aria-hidden="true"></i>
+            <p class="mb-0">A gaze app is already connected{% if patient.device_name %} on <strong>{{ patient.device_name }}</strong>{% endif %}. Connecting a new computer disconnects the old one.</p>
+          </div>
+        {% endif %}
+        <form method="post">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-primary btn-lg"><i class="bi bi-key" aria-hidden="true"></i> Create connection code</button>
+        </form>
+      {% endif %}
+    </div>
+  </section>
+
+  <aside class="col-lg-5" aria-labelledby="how-heading">
+    <div class="card-soft tips-card">
+      <h3 class="section-title mb-3" id="how-heading"><i class="bi bi-list-ol section-icon" aria-hidden="true"></i>On the patient's computer</h3>
+      <ol class="steps-list">
+        <li>Start <strong>GazeAssist</strong> (desktop icon).</li>
+        <li>The <em>Connect to caregiver dashboard</em> window opens.<br>
+            <span class="small text-body-secondary">Already set up before? Press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> in the gaze app.</span></li>
+        <li>Dashboard address:<br><code class="pairing-url">{{ dashboard_url }}</code></li>
+        <li>Type the 6-digit code and press <strong>Connect</strong>.</li>
+        <li>This page turns green when it worked.</li>
+      </ol>
+      <p class="small text-body-secondary mb-0"><i class="bi bi-shield-lock" aria-hidden="true"></i> The code works once and only for {{ patient.name }}. Nobody needs to copy passwords or edit files.</p>
+    </div>
+  </aside>
+</div>
+{% endblock %}

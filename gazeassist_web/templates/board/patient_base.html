@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% comment %}Layout shared by every patient tab: breadcrumb, header, tab bar, then {% block tab_content %}.{% endcomment %}
+{% block title %}{{ patient.name }}{% endblock %}
+{% block breadcrumb %}
+  <nav aria-label="Breadcrumb">
+    <ol class="breadcrumb">
+      <li class="breadcrumb-item"><a href="{% url 'board:dashboard' %}">Dashboard</a></li>
+      <li class="breadcrumb-item active" aria-current="page">{{ patient.name }}</li>
+    </ol>
+  </nav>
+{% endblock %}
+{% block page_title %}{{ patient.name }}{% endblock %}
+
+{% block content %}
+  {% include "partials/_patient_header.html" %}
+  {% include "partials/_patient_tabs.html" %}
+  <div class="tab-body">
+    {% block tab_content %}{% endblock %}
+  </div>
+{% endblock %}

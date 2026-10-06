@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block body_class %}auth-body{% endblock %}
+
+{% block shell %}
+<div class="auth-shell">
+  <aside class="auth-brand" aria-label="About GazeAssist">
+    <div class="auth-brand-inner">
+      <a class="auth-logo" href="{% url 'login' %}">
+        <span class="brand-mark"><i class="bi bi-eye-fill" aria-hidden="true"></i></span>
+        <span>GazeAssist</span>
+      </a>
+      <div class="auth-pitch">
+        <h2 class="auth-headline">Every glance,<br>heard.</h2>
+        <p class="auth-lead">The caregiver board for people who speak with their eyes. See requests the moment they happen, respond to emergencies, and keep care notes in one place.</p>
+        <ul class="auth-features">
+          <li><span class="feature-icon"><i class="bi bi-broadcast" aria-hidden="true"></i></span>Live requests and SOS alerts</li>
+          <li><span class="feature-icon"><i class="bi bi-file-earmark-medical" aria-hidden="true"></i></span>Reports and care history</li>
+          <li><span class="feature-icon"><i class="bi bi-shield-lock" aria-hidden="true"></i></span>Access only to your own patients</li>
+        </ul>
+      </div>
+      <p class="auth-foot">Assistive communication for ALS, stroke, cerebral palsy and more.</p>
+    </div>
+  </aside>
+
+  <main id="main" class="auth-panel" tabindex="-1">
+    <div class="auth-card">
+      {% block auth_content %}{% endblock %}
+    </div>
+  </main>
+</div>
+{% endblock %}

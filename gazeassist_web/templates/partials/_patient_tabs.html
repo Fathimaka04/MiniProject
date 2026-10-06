@@ -1,0 +1,21 @@
+{% comment %}Tab navigation for the patient page. Each tab is its own URL, so tabs work without JavaScript and can be bookmarked.{% endcomment %}
+<nav class="patient-tabs" aria-label="Patient sections">
+  <a class="patient-tab {% if active_tab == 'overview' %}active{% endif %}" href="{% url 'board:patient_detail' patient.pk %}"
+     {% if active_tab == 'overview' %}aria-current="page"{% endif %}>
+    <i class="bi bi-person-vcard" aria-hidden="true"></i>Overview
+  </a>
+  <a class="patient-tab {% if active_tab == 'reports' %}active{% endif %}" href="{% url 'board:patient_reports' patient.pk %}"
+     {% if active_tab == 'reports' %}aria-current="page"{% endif %}>
+    <i class="bi bi-folder2-open" aria-hidden="true"></i>Reports
+    <span class="tab-count">{{ reports_count }}</span>
+  </a>
+  <a class="patient-tab {% if active_tab == 'activity' %}active{% endif %}" href="{% url 'board:patient_activity' patient.pk %}"
+     {% if active_tab == 'activity' %}aria-current="page"{% endif %}>
+    <i class="bi bi-activity" aria-hidden="true"></i>Activity
+    <span class="tab-count is-alert" data-live-open-alerts data-live-hide-zero {% if not open_alerts_count %}hidden{% endif %}>{{ open_alerts_count }}</span>
+  </a>
+  <a class="patient-tab {% if active_tab == 'analytics' %}active{% endif %}" href="{% url 'board:patient_analytics' patient.pk %}"
+     {% if active_tab == 'analytics' %}aria-current="page"{% endif %}>
+    <i class="bi bi-bar-chart-line" aria-hidden="true"></i>Analytics
+  </a>
+</nav>

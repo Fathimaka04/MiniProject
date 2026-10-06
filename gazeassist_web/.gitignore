@@ -1,0 +1,17 @@
+# Secrets
+.env
+
+# Patient data
+db.sqlite3
+*.sqlite3
+private_media/
+
+# Generated
+staticfiles/
+logs/
+*.log
+
+# Python
+.venv/
+__pycache__/
+*.pyc

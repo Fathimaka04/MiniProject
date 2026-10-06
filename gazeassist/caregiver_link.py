@@ -9,14 +9,14 @@ dashboard's REST API with the patient's token:
     GET  /api/requests/<id>/status/      has a caregiver acknowledged it?
     GET  /api/messages/pending/          messages a caregiver sent to the patient
 
-Setup — add two lines to this project's .env file:
+Setup — no files to edit. A caregiver clicks "Connect gaze app" on the
+dashboard, gets a 6-digit code, and types it into this app's "Connect to
+caregiver dashboard" window (opens on first start, or press Ctrl+Shift+P).
+The app swaps the code for its API token (POST /api/pair/) and saves it,
+encrypted with Windows DPAPI, in data/dashboard_link.json.
 
-    GAZEASSIST_API_URL=http://127.0.0.1:8000
-    GAZEASSIST_API_TOKEN=<token>
-
-Get the token on the dashboard PC with:
-    python manage.py gaze_token --list
-    python manage.py gaze_token <patient_id>
+Older manual setup still works: GAZEASSIST_API_URL / GAZEASSIST_API_TOKEN in
+.env (a saved pairing takes priority over the .env token).
 
 What is in this file
 --------------------
@@ -46,14 +46,19 @@ works exactly as before.
 """
 from __future__ import annotations
 
+import base64
+import json
 import logging
 import os
 import queue
+import socket
 import threading
 import time
 import tkinter as tk
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 import requests
@@ -62,6 +67,110 @@ logger = logging.getLogger("gazeassist.caregiver_link")
 
 DEFAULT_API_URL = "http://127.0.0.1:8000"
 USER_AGENT = "GazeAssist-TkApp/1.0"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 0. The saved pairing (dashboard address + encrypted token)
+# ══════════════════════════════════════════════════════════════════════
+
+LINK_FILE = Path(__file__).resolve().parent / "data" / "dashboard_link.json"
+
+
+def _dpapi(data: bytes, protect: bool) -> bytes:
+    """Encrypt/decrypt with Windows DPAPI: only this Windows user on this
+    computer can decrypt. Elsewhere the data is stored as-is (base64)."""
+    if os.name != "nt":
+        return data
+    import ctypes
+    from ctypes import wintypes
+
+    class BLOB(ctypes.Structure):
+        _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
+
+    crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    func = crypt32.CryptProtectData if protect else crypt32.CryptUnprotectData
+    func.argtypes = [ctypes.POINTER(BLOB), ctypes.c_wchar_p, ctypes.POINTER(BLOB), ctypes.c_void_p,
+                     ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(BLOB)]
+    buffer = ctypes.create_string_buffer(data, len(data))
+    blob_in = BLOB(len(data), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_char)))
+    blob_out = BLOB()
+    CRYPTPROTECT_UI_FORBIDDEN = 0x1
+    args = (ctypes.byref(blob_in), "GazeAssist dashboard token" if protect else None, None, None, None,
+            CRYPTPROTECT_UI_FORBIDDEN, ctypes.byref(blob_out))
+    if not func(*args):
+        raise OSError(f"DPAPI {'protect' if protect else 'unprotect'} failed ({ctypes.get_last_error()})")
+    try:
+        return ctypes.string_at(blob_out.pbData, blob_out.cbData)
+    finally:
+        kernel32.LocalFree(blob_out.pbData)
+
+
+def load_saved_link() -> Optional[dict]:
+    """The saved pairing {url, token, patient_name, device_name, paired_at}, or None."""
+    try:
+        data = json.loads(LINK_FILE.read_text(encoding="utf-8"))
+        data["token"] = _dpapi(base64.b64decode(data.pop("token_protected")), protect=False).decode()
+        return data
+    except FileNotFoundError:
+        return None
+    except Exception as exc:  # corrupted, or copied from another user/computer
+        logger.warning("Caregiver link: saved pairing could not be read (%s) — connect again", exc)
+        return None
+
+
+def save_link(url: str, token: str, patient_name: str, device_name: str) -> None:
+    LINK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "url": url.rstrip("/"),
+        "token_protected": base64.b64encode(_dpapi(token.encode(), protect=True)).decode(),
+        "patient_name": patient_name,
+        "device_name": device_name,
+        "paired_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    tmp = LINK_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    tmp.replace(LINK_FILE)
+
+
+def forget_link() -> None:
+    try:
+        LINK_FILE.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def default_dashboard_url() -> str:
+    saved = load_saved_link()
+    return (os.environ.get("GAZEASSIST_API_URL") or (saved or {}).get("url") or DEFAULT_API_URL).rstrip("/")
+
+
+def pair_device(base_url: str, code: str, device_name: Optional[str] = None, timeout: float = 8.0) -> dict:
+    """Swap a one-time code from the dashboard for this patient's API token.
+
+    Returns {"token", "patient": {"id", "name", "language"}, ...}. Raises
+    CaregiverAPIError with a message suitable for showing on screen.
+    """
+    base_url = base_url.strip().rstrip("/")
+    if not base_url.startswith(("http://", "https://")):
+        base_url = "http://" + base_url
+    device_name = (device_name or socket.gethostname() or "Gaze app")[:100]
+    try:
+        resp = requests.post(f"{base_url}/api/pair/", json={"code": code, "device_name": device_name},
+                             headers={"Accept": "application/json", "User-Agent": USER_AGENT}, timeout=timeout)
+    except requests.RequestException as exc:
+        raise CaregiverAPIError(f"Cannot reach the dashboard at {base_url}. Is it running? ({exc.__class__.__name__})") from exc
+    try:
+        data = resp.json()
+    except ValueError:
+        raise CaregiverAPIError(f"{base_url} does not look like the GazeAssist dashboard.", resp.status_code)
+    if resp.status_code == 429:
+        raise CaregiverAPIError("Too many attempts. Wait a minute and try again.", 429)
+    if resp.status_code != 200 or "token" not in data:
+        raise CaregiverAPIError(data.get("detail") or "The code was not accepted.", resp.status_code)
+    data["base_url"] = base_url
+    return data
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -88,8 +197,14 @@ class CaregiverAPI:
 
     def __init__(self, base_url: Optional[str] = None, token: Optional[str] = None,
                  timeout: float = 5.0):
-        self.base_url = (base_url or os.environ.get("GAZEASSIST_API_URL") or DEFAULT_API_URL).rstrip("/")
-        self.token = (token if token is not None else os.environ.get("GAZEASSIST_API_TOKEN", "")).strip()
+        saved = load_saved_link() if (base_url is None or token is None) else None
+        # Address: explicit > GAZEASSIST_API_URL (.env / run_all.py) > saved pairing > default
+        self.base_url = (base_url or os.environ.get("GAZEASSIST_API_URL")
+                         or (saved or {}).get("url") or DEFAULT_API_URL).rstrip("/")
+        # Token: explicit > saved pairing > GAZEASSIST_API_TOKEN in .env (older manual setup)
+        if token is None:
+            token = (saved or {}).get("token") or os.environ.get("GAZEASSIST_API_TOKEN", "")
+        self.token = token.strip()
         self.timeout = timeout
         self._session = requests.Session()
         self._session.headers.update({
@@ -297,8 +412,8 @@ class CaregiverLink:
         """Start the background thread (does nothing if no token is configured)."""
         self._schedule_drain()
         if not self.enabled:
-            logger.warning("Caregiver link off: set GAZEASSIST_API_TOKEN in .env to connect to the dashboard")
-            self._events.put(("status", (False, "Caregiver board: not set up")))
+            logger.warning("Caregiver link off: not connected yet — press Ctrl+Shift+P and enter the dashboard's code")
+            self._events.put(("status", (False, "Caregiver board: not connected — press Ctrl+Shift+P")))
             return
         if self._thread and self._thread.is_alive():
             return
@@ -313,6 +428,22 @@ class CaregiverLink:
             name=f"caregiver-link-{self._generation}", daemon=True,
         )
         self._thread.start()
+
+    def use_api(self, api: CaregiverAPI) -> None:
+        """Switch to a new dashboard/token (after pairing) without restarting the app.
+
+        The old worker thread notices the newer generation and exits on its own.
+        """
+        self.api = api
+        self._connected = None
+        self._watches.clear()
+        self._wake.set()
+        if not self.enabled:
+            return
+        if self._drain_job is None:
+            self._schedule_drain()
+        self._start_thread()
+        logger.info("Caregiver link (re)connected → %s", self.api.base_url)
 
     def _check_stalled(self) -> None:
         """Watchdog (Tk thread). Every call has a 5 s timeout, so the worker
@@ -392,7 +523,7 @@ class CaregiverLink:
 
             except TokenRejectedError as exc:
                 logger.error("Caregiver link: %s", exc)
-                self._set_connected(False, "Caregiver board: token rejected")
+                self._set_connected(False, "Caregiver board: disconnected — press Ctrl+Shift+P to connect")
                 wait = self.TOKEN_RETRY_S
                 next_heartbeat = time.monotonic() + wait
 
@@ -603,6 +734,150 @@ class NoticeOverlay:
 
 
 # ══════════════════════════════════════════════════════════════════════
+# 5. PairingWindow — "Connect to caregiver dashboard" (typed by a caregiver)
+# ══════════════════════════════════════════════════════════════════════
+
+class PairingWindow:
+    """Small window where a caregiver types the dashboard's 6-digit code.
+
+    The network call runs on a background thread, so the window never freezes.
+    on_paired(api) runs on the Tk thread with a ready CaregiverAPI.
+    """
+
+    BG = "#0F172A"
+    CARD = "#1E293B"
+    TEXT = "#F1F5F9"
+    MUTED = "#94A3B8"
+    ACCENT = "#3B82F6"
+
+    def __init__(self, root: tk.Misc, on_paired: Callable[[CaregiverAPI], None],
+                 on_skip: Optional[Callable[[], None]] = None, font_family: str = "Segoe UI"):
+        self.root = root
+        self.on_paired = on_paired
+        self.on_skip = on_skip
+        self.font = font_family
+        self._busy = False
+        self._result: "queue.Queue[tuple[str, Any]]" = queue.Queue()
+
+        win = self.win = tk.Toplevel(root)
+        win.title("Connect to caregiver dashboard")
+        win.configure(bg=self.BG, padx=36, pady=28)
+        win.resizable(False, False)
+        win.transient(root)
+        win.protocol("WM_DELETE_WINDOW", self._skip)
+
+        tk.Label(win, text="Connect to caregiver dashboard", font=(font_family, 20, "bold"),
+                 fg=self.TEXT, bg=self.BG).pack(anchor="w")
+        tk.Label(win, text="On the dashboard, open the patient and click \"Connect gaze app\".\n"
+                           "Then type the 6-digit code shown there.",
+                 font=(font_family, 12), fg=self.MUTED, bg=self.BG, justify="left").pack(anchor="w", pady=(4, 18))
+
+        tk.Label(win, text="Dashboard address", font=(font_family, 11, "bold"), fg=self.TEXT, bg=self.BG).pack(anchor="w")
+        self.url_var = tk.StringVar(value=default_dashboard_url())
+        tk.Entry(win, textvariable=self.url_var, font=(font_family, 14), width=34,
+                 relief="flat", bg=self.CARD, fg=self.TEXT, insertbackground=self.TEXT).pack(anchor="w", ipady=6, pady=(4, 14))
+
+        tk.Label(win, text="Connection code", font=(font_family, 11, "bold"), fg=self.TEXT, bg=self.BG).pack(anchor="w")
+        self.code_var = tk.StringVar()
+        self.code_entry = tk.Entry(win, textvariable=self.code_var, font=(font_family, 28, "bold"), width=9,
+                                   justify="center", relief="flat", bg=self.CARD, fg=self.TEXT,
+                                   insertbackground=self.TEXT)
+        self.code_entry.pack(anchor="w", ipady=6, pady=(4, 6))
+
+        self.status = tk.Label(win, text="", font=(font_family, 12), fg=self.MUTED, bg=self.BG,
+                               wraplength=460, justify="left")
+        self.status.pack(anchor="w", pady=(4, 16))
+
+        buttons = tk.Frame(win, bg=self.BG)
+        buttons.pack(fill="x")
+        self.connect_btn = tk.Button(buttons, text="Connect", font=(font_family, 13, "bold"), width=12,
+                                     bg=self.ACCENT, fg="white", activebackground="#2563EB",
+                                     activeforeground="white", relief="flat", command=self._connect)
+        self.connect_btn.pack(side="left")
+        tk.Button(buttons, text="Skip for now", font=(font_family, 12), relief="flat", bg=self.CARD,
+                  fg=self.TEXT, activebackground="#334155", activeforeground=self.TEXT,
+                  command=self._skip).pack(side="left", padx=10)
+
+        win.bind("<Return>", lambda _e: self._connect())
+        win.bind("<Escape>", lambda _e: self._skip())
+        win.update_idletasks()
+        x = root.winfo_rootx() + max(0, (root.winfo_width() - win.winfo_width()) // 2)
+        y = root.winfo_rooty() + max(0, (root.winfo_height() - win.winfo_height()) // 3)
+        win.geometry(f"+{x}+{y}")
+        win.lift()
+        win.attributes("-topmost", True)
+        win.after(300, lambda: win.attributes("-topmost", False))
+        self.code_entry.focus_force()
+        try:
+            win.grab_set()
+        except tk.TclError:
+            pass
+
+    def _say(self, text: str, color: Optional[str] = None) -> None:
+        self.status.config(text=text, fg=color or self.MUTED)
+
+    def _connect(self) -> None:
+        if self._busy:
+            return
+        code = "".join(ch for ch in self.code_var.get() if ch.isdigit())
+        if len(code) != 6:
+            self._say("Type the 6-digit code from the dashboard.", "#FCA5A5")
+            return
+        url = self.url_var.get().strip()
+        self._busy = True
+        self.connect_btn.config(state="disabled", text="Connecting…")
+        self._say("Connecting…")
+        threading.Thread(target=self._pair_worker, args=(url, code), daemon=True).start()
+        self.win.after(100, self._poll_result)
+
+    def _pair_worker(self, url: str, code: str) -> None:
+        try:
+            data = pair_device(url, code)
+            device = socket.gethostname()
+            save_link(data["base_url"], data["token"], data["patient"]["name"], device)
+            self._result.put(("ok", data))
+        except CaregiverAPIError as exc:
+            self._result.put(("error", str(exc)))
+        except Exception as exc:
+            logger.exception("Pairing failed")
+            self._result.put(("error", f"Could not connect: {exc}"))
+
+    def _poll_result(self) -> None:
+        try:
+            kind, payload = self._result.get_nowait()
+        except queue.Empty:
+            self.win.after(100, self._poll_result)
+            return
+        self._busy = False
+        self.connect_btn.config(state="normal", text="Connect")
+        if kind == "error":
+            self._say(payload, "#FCA5A5")
+            self.code_entry.focus_set()
+            return
+        name = payload["patient"]["name"]
+        self._say(f"Connected to {name}'s caregiver dashboard.", "#86EFAC")
+        logger.info("Paired with the caregiver dashboard as %s", name)
+        api = CaregiverAPI(payload["base_url"], payload["token"])
+        self.win.after(1200, lambda: self._close(api))
+
+    def _close(self, api: Optional[CaregiverAPI]) -> None:
+        try:
+            self.win.grab_release()
+        except tk.TclError:
+            pass
+        self.win.destroy()
+        if api is not None:
+            self.on_paired(api)
+
+    def _skip(self) -> None:
+        if self._busy:
+            return
+        self._close(None)
+        if self.on_skip:
+            self.on_skip()
+
+
+# ══════════════════════════════════════════════════════════════════════
 # Quick check from the command line:  python caregiver_link.py
 # ══════════════════════════════════════════════════════════════════════
 
@@ -613,7 +888,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     api = CaregiverAPI()
     if not api.configured:
-        raise SystemExit("Set GAZEASSIST_API_TOKEN (and GAZEASSIST_API_URL) in .env first.")
+        raise SystemExit("Not connected yet: start GazeAssist and press Ctrl+Shift+P to enter the dashboard's code.")
     print("Dashboard:", api.base_url)
     try:
         beat = api.send_heartbeat()

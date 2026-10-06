@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% comment %}Fallback confirmation page, used when JavaScript (and so the modal) is unavailable.{% endcomment %}
+{% block title %}Delete report{% endblock %}
+{% block breadcrumb %}
+  <nav aria-label="Breadcrumb">
+    <ol class="breadcrumb">
+      <li class="breadcrumb-item"><a href="{% url 'board:dashboard' %}">Dashboard</a></li>
+      <li class="breadcrumb-item"><a href="{% url 'board:patient_reports' patient.pk %}">{{ patient.name }}</a></li>
+      <li class="breadcrumb-item active" aria-current="page">Delete report</li>
+    </ol>
+  </nav>
+{% endblock %}
+{% block page_title %}Delete report{% endblock %}
+
+{% block content %}
+<div class="card-soft confirm-card mx-auto text-center p-4 p-md-5">
+  <span class="modal-icon is-danger"><i class="bi bi-trash3" aria-hidden="true"></i></span>
+  <h2 class="h4 fw-bold mb-2">Delete “{{ report.title }}”?</h2>
+  <p class="text-body-secondary mb-4">The report and its file will be permanently removed from {{ patient.name }}'s records. This cannot be undone.</p>
+  <form method="post" class="d-flex flex-column flex-sm-row gap-2 justify-content-center">
+    {% csrf_token %}
+    <a class="btn btn-light-soft btn-lg" href="{% url 'board:patient_reports' patient.pk %}">Cancel</a>
+    <button type="submit" class="btn btn-danger btn-lg">Delete report</button>
+  </form>
+</div>
+{% endblock %}

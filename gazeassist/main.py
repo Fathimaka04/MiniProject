@@ -61,7 +61,7 @@ from state_machine.modes import StateMachine, AppMode
 from tts.indic_tts import create_tts_engine
 from dashboard.app import start_dashboard, set_sos_flag
 from calibration_screens.setup_wizard import SetupWizard
-from caregiver_link import CaregiverLink, NoticeOverlay
+from caregiver_link import CaregiverLink, NoticeOverlay, PairingWindow
 
 # ── Constants ─────────────────────────────────────────────────────────
 DB_PATH = os.path.join(PROJECT_ROOT, "gazeassist.db")
@@ -155,7 +155,8 @@ class GazeAssistApp:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         # Connect to the caregiver web dashboard. Runs on its own background
-        # thread; does nothing if GAZEASSIST_API_TOKEN is not set in .env.
+        # thread. If this computer has never been connected, a caregiver
+        # types the dashboard's 6-digit code once (Ctrl+Shift+P later).
         self.notices = NoticeOverlay(self.root)
         self.caregiver_link = CaregiverLink(
             self.root,
@@ -164,6 +165,13 @@ class GazeAssistApp:
             on_message=self._on_caregiver_message,
         )
         self.caregiver_link.start()
+        self.root.bind_all("<Control-Shift-P>", lambda _e: self._open_pairing())
+        self.root.bind_all("<Control-Shift-p>", lambda _e: self._open_pairing())
+        if not self.caregiver_link.enabled:
+            # First start on this computer: ask once, before calibration.
+            window = self._open_pairing()
+            if window is not None:
+                self.root.wait_window(window.win)
 
         # Hide the main window until it actually has content (setup wizard /
         # calibration run in their own window first) — otherwise an empty
@@ -545,6 +553,26 @@ class GazeAssistApp:
             target=lambda: self.tts.speak(text, self.language),
             daemon=True,
         ).start()
+
+    def _open_pairing(self) -> Optional[PairingWindow]:
+        """'Connect to caregiver dashboard' window (typed by a caregiver)."""
+        if getattr(self, "_pairing_window", None) is not None:
+            try:
+                if self._pairing_window.win.winfo_exists():
+                    self._pairing_window.win.lift()
+                    return None
+            except tk.TclError:
+                pass
+        self._pairing_window = PairingWindow(self.root, on_paired=self._on_paired)
+        return self._pairing_window
+
+    def _on_paired(self, api):
+        """The code was accepted: start talking to the dashboard right away."""
+        if self.caregiver_link:
+            self.caregiver_link.use_api(api)
+        if self.notices:
+            self.notices.show("Connected", "Your caregivers will now see your requests.",
+                              kind="help", seconds=6)
 
     def _on_caregiver_status(self, connected: bool, text: str):
         """Dashboard connection went up or down — update the corner badge."""

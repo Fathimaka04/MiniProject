@@ -1,0 +1,15 @@
+{% load board_extras %}
+<div class="toast-container position-fixed top-0 end-0 p-3" id="toast-container">
+  {% for message in messages %}
+    <div class="toast ga-toast ga-toast-{{ message.level_tag }}"
+         role="{% if message.level_tag == 'danger' or message.level_tag == 'warning' %}alert{% else %}status{% endif %}"
+         aria-live="{% if message.level_tag == 'danger' %}assertive{% else %}polite{% endif %}" aria-atomic="true"
+         data-bs-delay="6000">
+      <div class="d-flex align-items-start">
+        <span class="ga-toast-icon"><i class="bi {{ message.level_tag|message_icon }}" aria-hidden="true"></i></span>
+        <div class="toast-body">{{ message }}</div>
+        <button type="button" class="btn-close me-2 mt-2" data-bs-dismiss="toast" aria-label="Close"></button>
+      </div>
+    </div>
+  {% endfor %}
+</div>

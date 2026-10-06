@@ -1,0 +1,8 @@
+{% comment %}
+  Usage: {% include "partials/_empty_state.html" with icon="bi-folder2-open" title="No reports yet" text="Upload the first report." %}
+{% endcomment %}
+<div class="empty-state {{ extra_class }}">
+  <span class="empty-icon"><i class="bi {{ icon|default:'bi-inbox' }}" aria-hidden="true"></i></span>
+  <p class="empty-title">{{ title }}</p>
+  {% if text %}<p class="empty-text">{{ text }}</p>{% endif %}
+</div>

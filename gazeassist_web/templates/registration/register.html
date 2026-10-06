@@ -1,0 +1,37 @@
+{% extends "base_auth.html" %}
+{% block title %}Create account{% endblock %}
+
+{% block auth_content %}
+<h1 class="auth-title">Create your account</h1>
+<p class="auth-subtitle">Register as a caregiver to follow your patients' requests.</p>
+
+{% if require_approval %}
+  <div class="alert alert-info-soft d-flex gap-2 align-items-start" role="note">
+    <i class="bi bi-hourglass-split mt-1" aria-hidden="true"></i>
+    <p class="mb-0">New accounts are reviewed by an administrator before first sign-in.</p>
+  </div>
+{% endif %}
+
+{% include "partials/_form_errors.html" %}
+
+<form method="post" novalidate>
+  {% csrf_token %}
+  <div class="row g-2">
+    <div class="col-sm-6">{% include "partials/_form_field.html" with field=form.first_name %}</div>
+    <div class="col-sm-6">{% include "partials/_form_field.html" with field=form.last_name %}</div>
+  </div>
+  {% include "partials/_form_field.html" with field=form.email %}
+  <div class="row g-2">
+    <div class="col-sm-6">{% include "partials/_form_field.html" with field=form.username %}</div>
+    <div class="col-sm-6">{% include "partials/_form_field.html" with field=form.phone %}</div>
+  </div>
+  {% include "partials/_form_field.html" with field=form.password1 %}
+  {% include "partials/_form_field.html" with field=form.password2 %}
+
+  <button class="btn btn-primary btn-lg w-100 mt-2" type="submit">
+    Create account <i class="bi bi-arrow-right ms-1" aria-hidden="true"></i>
+  </button>
+</form>
+
+<p class="auth-switch">Already registered? <a href="{% url 'login' %}">Sign in</a></p>
+{% endblock %}

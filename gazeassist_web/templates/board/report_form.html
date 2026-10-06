@@ -1,0 +1,45 @@
+{% extends "board/patient_base.html" %}
+{% block title %}Add report · {{ patient.name }}{% endblock %}
+
+{% block tab_content %}
+<div class="row g-4">
+  <section class="col-lg-8" aria-labelledby="form-heading">
+    <div class="card-soft">
+      <div class="section-header">
+        <h3 class="section-title" id="form-heading"><i class="bi bi-cloud-arrow-up section-icon" aria-hidden="true"></i>Add a report</h3>
+        <a class="btn btn-sm btn-light-soft" href="{% url 'board:patient_reports' patient.pk %}"><i class="bi bi-arrow-left" aria-hidden="true"></i> Back to reports</a>
+      </div>
+
+      {% include "partials/_form_errors.html" %}
+
+      <form method="post" enctype="multipart/form-data" novalidate>
+        {% csrf_token %}
+        {% include "partials/_form_field.html" with field=form.title %}
+        <div class="row g-2">
+          <div class="col-sm-6">{% include "partials/_form_field.html" with field=form.report_type %}</div>
+          <div class="col-sm-6">{% include "partials/_form_field.html" with field=form.report_date %}</div>
+        </div>
+        {% include "partials/_form_field.html" with field=form.notes %}
+        {% include "partials/_form_field.html" with field=form.file %}
+
+        <div class="d-flex flex-column flex-sm-row gap-2 justify-content-end mt-4">
+          <a class="btn btn-light-soft btn-lg" href="{% url 'board:patient_reports' patient.pk %}">Cancel</a>
+          <button type="submit" class="btn btn-primary btn-lg"><i class="bi bi-check2" aria-hidden="true"></i> Save report</button>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <aside class="col-lg-4" aria-labelledby="tips-heading">
+    <div class="card-soft tips-card">
+      <h3 class="section-title mb-3" id="tips-heading"><i class="bi bi-shield-lock section-icon" aria-hidden="true"></i>About uploads</h3>
+      <ul class="tips-list">
+        <li><i class="bi bi-check-circle-fill" aria-hidden="true"></i>PDF, PNG and JPG only, up to 5 MB.</li>
+        <li><i class="bi bi-check-circle-fill" aria-hidden="true"></i>Files are stored privately and can only be opened by {{ patient.name }}'s care team.</li>
+        <li><i class="bi bi-check-circle-fill" aria-hidden="true"></i>Each file gets a random name on the server; the original name is kept for downloads.</li>
+        <li><i class="bi bi-check-circle-fill" aria-hidden="true"></i>You and primary caregivers can delete reports you upload.</li>
+      </ul>
+    </div>
+  </aside>
+</div>
+{% endblock %}

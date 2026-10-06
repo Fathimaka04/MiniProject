@@ -1,0 +1,41 @@
+# ── Secrets: never commit ───────────────────────────────────────────
+# API keys, WhatsApp/SMS tokens, Django SECRET_KEY live here.
+.env
+*.env
+!.env.example
+
+# ── Patient data: never commit ──────────────────────────────────────
+# Local databases (names, sessions, emergency contacts, requests)
+*.db
+*.sqlite3
+*.sqlite3-journal
+# Uploaded medical reports
+gazeassist_web/private_media/
+# Per-user calibration / blink enrollment
+gazeassist/data/users/
+# Encrypted dashboard pairing token of this computer
+gazeassist/data/dashboard_link.json
+gazeassist/data/dashboard_link.tmp
+# pywhatkit's local log (contains phone numbers)
+PyWhatKit_DB.txt
+
+# ── Generated files ─────────────────────────────────────────────────
+logs/
+*.log
+gazeassist_web/staticfiles/
+gazeassist/sos/_alarm.wav
+
+# ── Python ──────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# ── Editors / OS ────────────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

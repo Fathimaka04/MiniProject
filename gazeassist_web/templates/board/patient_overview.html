@@ -1,0 +1,168 @@
+{% extends "board/patient_base.html" %}
+{% load board_extras %}
+{% block title %}{{ patient.name }} · Overview{% endblock %}
+
+{% block tab_content %}
+<section class="row g-3 mb-4" aria-label="At a glance">
+  <div class="col-6 col-xl-3">
+    {% include "partials/_stat_card.html" with label="Requests today" value=requests_today icon="bi-chat-left-text-fill" tone="blue" %}
+  </div>
+  <div class="col-6 col-xl-3">
+    {% include "partials/_stat_card.html" with label="Open alerts" value=open_alerts_count icon="bi-bell-fill" tone="red" %}
+  </div>
+  <div class="col-6 col-xl-3">
+    {% include "partials/_stat_card.html" with label="Reports" value=reports_count icon="bi-folder2-open" tone="teal" %}
+  </div>
+  <div class="col-6 col-xl-3">
+    {% if patient.last_seen %}
+      {% include "partials/_stat_card.html" with label="Last seen" value=patient.last_seen|date:"H:i" icon="bi-clock-history" tone="amber" hint=patient.last_seen|date:"j M Y" %}
+    {% else %}
+      {% include "partials/_stat_card.html" with label="Last seen" value="Never" icon="bi-clock-history" tone="amber" hint="gaze app not connected" %}
+    {% endif %}
+  </div>
+</section>
+
+<div class="row g-4">
+  <div class="col-lg-5 d-flex flex-column gap-4">
+    <section class="card-soft" id="gaze-app" aria-labelledby="gaze-app-heading">
+      <h3 class="section-title mb-3" id="gaze-app-heading"><i class="bi bi-eye section-icon" aria-hidden="true"></i>Gaze app</h3>
+      {% if patient.has_gaze_app %}
+        <p class="device-line"><span class="device-dot is-on" aria-hidden="true"></span>
+          <span>Connected{% if patient.device_name %} on <strong>{{ patient.device_name }}</strong>{% endif %}</span></p>
+        <p class="small text-body-secondary mb-3">
+          {% if patient.device_paired_at %}Since {{ patient.device_paired_at|date:"j M Y, H:i" }} · {% endif %}
+          {% if patient.is_online %}running now{% elif patient.last_seen %}last seen {{ patient.last_seen|date:"j M, H:i" }}{% else %}not started yet{% endif %}
+        </p>
+      {% else %}
+        <p class="device-line"><span class="device-dot" aria-hidden="true"></span><span>Not connected</span></p>
+        <p class="small text-body-secondary mb-3">Connect it once with a 6-digit code — no files or passwords to copy.</p>
+      {% endif %}
+      {% if my_link.role == "primary" %}
+        <div class="d-flex flex-wrap gap-2">
+          <a class="btn btn-primary" href="{% url 'board:device_connect' patient.pk %}">
+            <i class="bi bi-link-45deg" aria-hidden="true"></i> {% if patient.has_gaze_app %}Connect a new computer{% else %}Connect gaze app{% endif %}
+          </a>
+          {% if patient.has_gaze_app %}
+            <form method="post" action="{% url 'board:device_disconnect' patient.pk %}"
+                  data-confirm="Disconnect {{ patient.name }}'s gaze app? It will stop sending requests and SOS alerts until it is connected again.">
+              {% csrf_token %}
+              <button type="submit" class="btn btn-light-soft"><i class="bi bi-x-circle" aria-hidden="true"></i> Disconnect</button>
+            </form>
+          {% endif %}
+        </div>
+      {% else %}
+        <p class="small text-body-secondary mb-0"><i class="bi bi-info-circle" aria-hidden="true"></i> Only a primary caregiver can connect or disconnect the gaze app.</p>
+      {% endif %}
+    </section>
+
+    <section class="card-soft" aria-labelledby="profile-heading">
+      <h3 class="section-title mb-3" id="profile-heading"><i class="bi bi-person-lines-fill section-icon" aria-hidden="true"></i>Profile</h3>
+      <dl class="profile-list mb-0">
+        <dt>Full name</dt><dd>{{ patient.name }}</dd>
+        <dt>Date of birth</dt><dd>{{ patient.date_of_birth|date:"j F Y"|default:"—" }}</dd>
+        <dt>Age</dt><dd>{% if patient.age is not None %}{{ patient.age }} years{% else %}—{% endif %}</dd>
+        <dt>Gender</dt><dd>{{ patient.get_gender_display }}</dd>
+        <dt>Language</dt><dd>{{ patient.language }}</dd>
+        <dt>Registered</dt><dd>{{ patient.created_at|date:"j M Y" }}</dd>
+      </dl>
+    </section>
+
+    <section class="card-soft" aria-labelledby="condition-heading">
+      <h3 class="section-title mb-3" id="condition-heading"><i class="bi bi-heart-pulse section-icon" aria-hidden="true"></i>Condition</h3>
+      <p class="mb-2"><span class="badge badge-soft badge-soft-teal fs-6">{{ patient.get_condition_type_display }}</span></p>
+      {% if patient.condition_notes %}
+        <p class="condition-notes mb-0">{{ patient.condition_notes|linebreaksbr }}</p>
+      {% else %}
+        <p class="text-body-secondary mb-0">No condition notes recorded.</p>
+      {% endif %}
+    </section>
+
+    <section class="card-soft" aria-labelledby="team-heading">
+      <h3 class="section-title mb-3" id="team-heading"><i class="bi bi-people section-icon" aria-hidden="true"></i>Care team</h3>
+      <ul class="list-unstyled mb-0 care-team">
+        {% for link in care_team %}
+          <li>
+            <span class="avatar avatar-sm" style="--avatar-hue: 215" aria-hidden="true">{{ link.caregiver.initials }}</span>
+            <div class="min-w-0">
+              <p class="mb-0 fw-semibold text-truncate">{{ link.caregiver.display_name }}{% if link.caregiver == caregiver %} <span class="text-body-secondary fw-normal">(you)</span>{% endif %}</p>
+              {% if link.caregiver.phone %}<a class="small" href="tel:{{ link.caregiver.phone }}">{{ link.caregiver.phone }}</a>{% endif %}
+            </div>
+            <span class="badge badge-soft {% if link.role == 'primary' %}badge-soft-blue{% else %}badge-soft-grey{% endif %} ms-auto">{{ link.get_role_display }}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+  </div>
+
+  <div class="col-lg-7 d-flex flex-column gap-4">
+    <section class="card-soft message-card" id="message" aria-labelledby="message-heading">
+      <h3 class="section-title mb-1" id="message-heading"><i class="bi bi-send section-icon" aria-hidden="true"></i>Message {{ patient.name }}</h3>
+      <p class="small text-body-secondary mb-3">Shown on the gaze app screen within a few seconds.</p>
+
+      <div class="quick-replies mb-2" role="group" aria-label="Quick replies">
+        {% for reply in quick_replies %}
+          <button type="button" class="chip" data-quick-reply="{{ reply }}">{{ reply }}</button>
+        {% endfor %}
+      </div>
+
+      <form method="post" action="{% url 'board:message_send' patient.pk %}" data-message-form novalidate>
+        {% csrf_token %}
+        {% include "partials/_form_field.html" with field=message_form.text %}
+        <div class="d-flex align-items-center justify-content-between gap-2">
+          <span class="small text-body-secondary" data-char-count aria-live="polite">0 / 280</span>
+          <button type="submit" class="btn btn-primary btn-lg"><i class="bi bi-send-fill" aria-hidden="true"></i> Send</button>
+        </div>
+      </form>
+
+      <h4 class="subheading mt-4">Recently sent</h4>
+      <ul class="list-unstyled mb-0 message-list" data-message-list>
+        {% for message in recent_messages %}
+          {% include "partials/_message_item.html" %}
+        {% empty %}
+          <li class="text-body-secondary small" data-message-empty>No messages sent yet.</li>
+        {% endfor %}
+      </ul>
+    </section>
+
+    <section class="card-soft" aria-labelledby="recent-heading">
+      <div class="section-header mb-2">
+        <h3 class="section-title" id="recent-heading"><i class="bi bi-activity section-icon" aria-hidden="true"></i>Recent activity</h3>
+        <a class="btn btn-sm btn-light-soft" href="{% url 'board:patient_activity' patient.pk %}">View all <i class="bi bi-arrow-right" aria-hidden="true"></i></a>
+      </div>
+      <ol class="feed" data-live-feed data-limit="5" aria-live="polite" {% if not recent_requests %}hidden{% endif %}>
+        {% for item in recent_requests %}{% include "partials/_feed_item.html" %}{% endfor %}
+      </ol>
+      {% if not recent_requests %}
+        <div data-live-feed-empty>
+          {% include "partials/_empty_state.html" with icon="bi-chat-square-dots" title="No activity yet" text="Requests from the gaze app will appear here." %}
+        </div>
+      {% endif %}
+    </section>
+
+    <section class="card-soft" aria-labelledby="latest-reports-heading">
+      <div class="section-header mb-2">
+        <h3 class="section-title" id="latest-reports-heading"><i class="bi bi-folder2-open section-icon" aria-hidden="true"></i>Latest reports</h3>
+        <a class="btn btn-sm btn-light-soft" href="{% url 'board:patient_reports' patient.pk %}">All reports <i class="bi bi-arrow-right" aria-hidden="true"></i></a>
+      </div>
+      {% if latest_reports %}
+        <ul class="list-unstyled mb-0 report-list">
+          {% for report in latest_reports %}
+            <li>
+              <span class="file-icon {% if report.is_image %}is-image{% endif %}" aria-hidden="true">
+                <i class="bi {% if report.is_image %}bi-file-earmark-image-fill{% else %}bi-file-earmark-pdf-fill{% endif %}"></i>
+              </span>
+              <div class="min-w-0 flex-grow-1">
+                <a class="fw-semibold text-truncate d-block" href="{% url 'board:report_view' report.pk %}" target="_blank" rel="noopener">{{ report.title }}<span class="visually-hidden"> (opens in a new tab)</span></a>
+                <span class="small text-body-secondary">{{ report.report_date|date:"j M Y" }}</span>
+              </div>
+              <span class="badge badge-soft {{ report.report_type|report_badge }}">{{ report.get_report_type_display }}</span>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        {% include "partials/_empty_state.html" with icon="bi-folder2-open" title="No reports yet" text="Upload doctor visits, lab results or therapy notes." %}
+      {% endif %}
+    </section>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,6 @@
+{% load board_extras %}{% comment %}Online/offline pill for `patient`. Re-rendered by the live endpoints.{% endcomment %}
+{% if patient.is_online %}
+  <span class="status-pill is-online"><span class="dot" aria-hidden="true"></span>Online</span>
+{% else %}
+  <span class="status-pill"><span class="dot" aria-hidden="true"></span>Offline{% if patient.last_seen %}<span class="d-none d-sm-inline"> · last seen {{ patient.last_seen|ago }}</span>{% endif %}</span>
+{% endif %}

@@ -1,0 +1,52 @@
+{% load board_extras %}
+<aside class="sidebar offcanvas-lg offcanvas-start" tabindex="-1" id="sidebar" aria-labelledby="sidebar-title">
+  <div class="sidebar-inner">
+    <div class="sidebar-brand">
+      <span class="brand-mark"><i class="bi bi-eye-fill" aria-hidden="true"></i></span>
+      <span class="brand-text" id="sidebar-title">GazeAssist<small>Caregiver board</small></span>
+      <button type="button" class="btn-close btn-close-white d-lg-none ms-auto" data-bs-dismiss="offcanvas"
+              data-bs-target="#sidebar" aria-label="Close menu"></button>
+    </div>
+
+    <nav class="sidebar-nav" aria-label="Main navigation">
+      <p class="sidebar-label">Main</p>
+      {% nav_active "dashboard" as dash_active %}
+      <a class="sidebar-link {{ dash_active }}" href="{% url 'board:dashboard' %}" {% if dash_active %}aria-current="page"{% endif %}>
+        <i class="bi bi-grid-1x2-fill" aria-hidden="true"></i><span>Dashboard</span>
+      </a>
+      {% nav_active "patient_detail" "patient_reports" "report_add" "patient_activity" "patient_analytics" "report_delete" as patients_active %}
+      <a class="sidebar-link {{ patients_active }}" href="{% url 'board:dashboard' %}#patients">
+        <i class="bi bi-people-fill" aria-hidden="true"></i><span>My patients</span>
+      </a>
+      <a class="sidebar-link" href="{% url 'board:dashboard' %}#alerts">
+        <i class="bi bi-bell-fill" aria-hidden="true"></i><span>Alerts</span>
+        <span class="sidebar-badge" data-live-nav-alerts {% if not nav_open_alerts %}hidden{% endif %}>{{ nav_open_alerts|default:0 }}<span class="visually-hidden"> open alerts</span></span>
+      </a>
+
+      {% if user.is_staff %}
+        <p class="sidebar-label">Administration</p>
+        <a class="sidebar-link" href="{% url 'admin:index' %}">
+          <i class="bi bi-shield-lock-fill" aria-hidden="true"></i><span>Admin panel</span>
+        </a>
+      {% endif %}
+    </nav>
+
+    {% if user.is_authenticated %}
+    <div class="sidebar-footer">
+      <div class="sidebar-user">
+        <span class="avatar avatar-sm avatar-light" aria-hidden="true">{% if nav_caregiver %}{{ nav_caregiver.initials }}{% else %}{{ user.username|slice:":2"|upper }}{% endif %}</span>
+        <div class="min-w-0">
+          <p class="sidebar-user-name text-truncate">{{ user.get_full_name|default:user.username }}</p>
+          <p class="sidebar-user-role">{% if nav_caregiver.is_primary %}Primary caregiver{% else %}Caregiver{% endif %}</p>
+        </div>
+      </div>
+      <form method="post" action="{% url 'logout' %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-sidebar-logout" aria-label="Sign out">
+          <i class="bi bi-box-arrow-right" aria-hidden="true"></i>
+        </button>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+</aside>

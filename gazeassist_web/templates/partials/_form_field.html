@@ -1,0 +1,43 @@
+{% comment %}
+  Renders one form field with a Bootstrap floating label, error text and help text.
+  File inputs get a drop-zone style; checkboxes a normal form-check.
+  Usage: {% include "partials/_form_field.html" with field=form.email %}
+{% endcomment %}
+{% if field.is_hidden %}
+  {{ field }}
+{% elif field.widget_type == "checkbox" %}
+  <div class="form-check mb-3">
+    {{ field }}
+    <label class="form-check-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+    {% if field.errors %}<div class="invalid-feedback d-block" id="{{ field.auto_id }}_error">{{ field.errors|join:" " }}</div>{% endif %}
+  </div>
+{% elif field.widget_type == "file" or field.widget_type == "clearablefile" %}
+  <div class="mb-3">
+    <label class="form-label fw-semibold" for="{{ field.id_for_label }}">{{ field.label }}{% if field.field.required %}<span class="required-mark" aria-hidden="true"> *</span>{% endif %}</label>
+    <div class="file-drop {% if field.errors %}is-invalid{% endif %}" data-file-drop>
+      <span class="file-drop-icon" aria-hidden="true"><i class="bi bi-cloud-arrow-up"></i></span>
+      <p class="file-drop-text mb-1"><strong>Choose a file</strong> or drag it here</p>
+      {% if field.help_text %}<p class="form-text mt-0 mb-2" id="{{ field.auto_id }}_help">{{ field.help_text }}</p>{% endif %}
+      {{ field }}
+      <p class="file-drop-name mb-0" data-file-name aria-live="polite"></p>
+    </div>
+    {% if field.errors %}
+      <div class="invalid-feedback d-block" id="{{ field.auto_id }}_error">
+        <i class="bi bi-exclamation-circle" aria-hidden="true"></i> {{ field.errors|join:" " }}
+      </div>
+    {% endif %}
+  </div>
+{% else %}
+  <div class="mb-3">
+    <div class="form-floating">
+      {{ field }}
+      <label for="{{ field.id_for_label }}">{{ field.label }}{% if field.field.required %}<span class="required-mark" aria-hidden="true"> *</span>{% endif %}</label>
+    </div>
+    {% if field.errors %}
+      <div class="invalid-feedback d-block" id="{{ field.auto_id }}_error">
+        <i class="bi bi-exclamation-circle" aria-hidden="true"></i> {{ field.errors|join:" " }}
+      </div>
+    {% endif %}
+    {% if field.help_text %}<div class="form-text">{{ field.help_text|safe }}</div>{% endif %}
+  </div>
+{% endif %}

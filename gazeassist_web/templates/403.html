@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Not allowed{% endblock %}
+{% block page_title %}Not allowed{% endblock %}
+{% block content %}
+<div class="card-soft confirm-card mx-auto text-center p-4 p-md-5">
+  <span class="modal-icon is-danger"><i class="bi bi-shield-lock" aria-hidden="true"></i></span>
+  <h2 class="h4 fw-bold mb-2">You don't have permission to do that</h2>
+  <p class="text-body-secondary mb-4">{{ exception|default:"Ask a primary caregiver or an administrator for help." }}</p>
+  <a class="btn btn-primary btn-lg" href="{% url 'board:dashboard' %}"><i class="bi bi-house" aria-hidden="true"></i> Back to dashboard</a>
+</div>
+{% endblock %}

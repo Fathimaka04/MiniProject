@@ -1,0 +1,49 @@
+{% extends "board/patient_base.html" %}
+{% load board_extras %}
+{% block title %}{{ patient.name }} · Activity{% endblock %}
+
+{% block tab_content %}
+<section class="card-soft" aria-labelledby="activity-heading">
+  <div class="section-header">
+    <h3 class="section-title" id="activity-heading">Activity feed</h3>
+    <span class="small text-body-secondary">
+      {% if page_obj.number == 1 %}<i class="bi bi-broadcast" aria-hidden="true"></i> New requests appear automatically
+      {% else %}<i class="bi bi-clock-history" aria-hidden="true"></i> Older requests · <a href="{% url_replace page='' %}">back to latest</a>{% endif %}
+    </span>
+  </div>
+
+  <div class="filter-chips mb-3" role="group" aria-label="Filter activity">
+    {% for option in filters %}
+      <a class="chip {% if current_filter == option.value %}active{% endif %} {% if option.value == 'open' and option.count %}chip-alert{% endif %}"
+         href="{% url_replace filter=option.value page='' %}" {% if current_filter == option.value %}aria-current="true"{% endif %}>
+        {{ option.label }} <span class="chip-count">{{ option.count }}</span>
+      </a>
+    {% endfor %}
+  </div>
+
+  {# Only page 1 is live: new items are inserted at the top by gazeassist.js. #}
+  <ol class="feed feed-grouped" {% if page_obj.number == 1 %}data-live-feed data-grouped data-filter="{{ current_filter }}"{% endif %}
+      aria-live="polite" {% if not requests %}hidden{% endif %}>
+    {% for item in requests %}
+      {% ifchanged item.timestamp|day_label %}
+        <li class="feed-date" {% if item.timestamp|day_label == "Today" %}data-today{% endif %}><span>{{ item.timestamp|day_label }}</span></li>
+      {% endifchanged %}
+      {% include "partials/_feed_item.html" %}
+    {% endfor %}
+  </ol>
+
+  {% if requests %}
+    {% include "partials/_pagination.html" %}
+  {% else %}
+    <div data-live-feed-empty>
+      {% if current_filter == "open" %}
+        {% include "partials/_empty_state.html" with icon="bi-check2-circle" title="All clear" text="There are no emergencies waiting for a reply." %}
+      {% elif current_filter != "all" %}
+        {% include "partials/_empty_state.html" with icon="bi-funnel" title="Nothing here" text="No requests match this filter." %}
+      {% else %}
+        {% include "partials/_empty_state.html" with icon="bi-chat-square-dots" title="No activity yet" text="Requests from the gaze app will appear here as they happen." %}
+      {% endif %}
+    </div>
+  {% endif %}
+</section>
+{% endblock %}

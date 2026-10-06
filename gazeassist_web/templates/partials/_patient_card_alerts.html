@@ -1,0 +1,9 @@
+{% comment %}Right side of a patient card footer: open alerts, or today's request count.{% endcomment %}
+{% if patient.unack_alerts %}
+  <span class="badge badge-soft badge-soft-red">
+    <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+    {{ patient.unack_alerts }} open alert{{ patient.unack_alerts|pluralize }}
+  </span>
+{% else %}
+  <span class="small text-body-secondary">{{ patient.requests_today }} request{{ patient.requests_today|pluralize }} today</span>
+{% endif %}

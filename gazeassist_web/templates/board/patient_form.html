@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Add patient{% endblock %}
+{% block breadcrumb %}
+  <nav aria-label="Breadcrumb">
+    <ol class="breadcrumb">
+      <li class="breadcrumb-item"><a href="{% url 'board:dashboard' %}">Dashboard</a></li>
+      <li class="breadcrumb-item active" aria-current="page">Add patient</li>
+    </ol>
+  </nav>
+{% endblock %}
+{% block page_title %}Add patient{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+  <section class="col-lg-8" aria-labelledby="patient-form-heading">
+    <div class="card-soft">
+      <div class="section-header">
+        <h2 class="section-title" id="patient-form-heading"><i class="bi bi-person-plus section-icon" aria-hidden="true"></i>New patient</h2>
+        <a class="btn btn-sm btn-light-soft" href="{% url 'board:dashboard' %}"><i class="bi bi-arrow-left" aria-hidden="true"></i> Back</a>
+      </div>
+
+      {% include "partials/_form_errors.html" %}
+
+      <form method="post" novalidate>
+        {% csrf_token %}
+        {% include "partials/_form_field.html" with field=form.name %}
+        <div class="row g-2">
+          <div class="col-sm-6">{% include "partials/_form_field.html" with field=form.date_of_birth %}</div>
+          <div class="col-sm-6">{% include "partials/_form_field.html" with field=form.gender %}</div>
+        </div>
+        <div class="row g-2">
+          <div class="col-sm-6">{% include "partials/_form_field.html" with field=form.language %}</div>
+          <div class="col-sm-6">{% include "partials/_form_field.html" with field=form.condition_type %}</div>
+        </div>
+        {% include "partials/_form_field.html" with field=form.condition_notes %}
+
+        <div class="d-flex flex-column flex-sm-row gap-2 justify-content-end mt-4">
+          <a class="btn btn-light-soft btn-lg" href="{% url 'board:dashboard' %}">Cancel</a>
+          <button type="submit" class="btn btn-primary btn-lg"><i class="bi bi-check2" aria-hidden="true"></i> Add patient</button>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <aside class="col-lg-4" aria-labelledby="next-heading">
+    <div class="card-soft tips-card">
+      <h2 class="section-title mb-3" id="next-heading"><i class="bi bi-signpost-2 section-icon" aria-hidden="true"></i>What happens next</h2>
+      <ol class="steps-list">
+        <li>You become this patient's <strong>primary caregiver</strong>.</li>
+        <li>You get a <strong>6-digit code</strong> to connect their gaze app.</li>
+        <li>Type the code once on the patient's computer. After that it connects by itself.</li>
+      </ol>
+    </div>
+  </aside>
+</div>
+{% endblock %}

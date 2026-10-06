@@ -1,0 +1,10 @@
+{% comment %}Body of the dashboard "Open alerts" card. Re-rendered by the live endpoint.{% endcomment %}
+{% if recent_alerts %}
+  <ol class="feed">
+    {% for item in recent_alerts %}
+      {% include "partials/_feed_item.html" with show_patient=True %}
+    {% endfor %}
+  </ol>
+{% else %}
+  {% include "partials/_empty_state.html" with icon="bi-check2-circle" title="All clear" text="There are no emergencies waiting for a reply." %}
+{% endif %}

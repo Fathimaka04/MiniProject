@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+
+{% block content %}
+<div data-live-dashboard="{% url 'board:live_dashboard' %}" data-interval="{{ poll_interval_ms|default:3000 }}">
+
+<section class="welcome">
+  <p class="welcome-text">Good {{ greeting }}, <strong>{{ caregiver.display_name }}</strong>.
+    <span data-live-welcome data-count="{{ unacknowledged }}">
+      {% if unacknowledged %}<span class="text-alert fw-semibold">{{ unacknowledged }} alert{{ unacknowledged|pluralize }} need{{ unacknowledged|pluralize:"s," }} your attention.</span>
+      {% else %}Here is how your patients are doing.{% endif %}
+    </span>
+  </p>
+</section>
+
+<section class="row g-3 mb-4" aria-label="Summary">
+  <div class="col-6 col-xl-3" data-live-stat="total_patients">
+    {% include "partials/_stat_card.html" with label="Patients" value=total_patients icon="bi-people-fill" tone="blue" hint="linked to you" %}
+  </div>
+  <div class="col-6 col-xl-3" data-live-stat="online_now">
+    {% include "partials/_stat_card.html" with label="Online now" value=online_now icon="bi-wifi" tone="teal" hint="gaze app active" %}
+  </div>
+  <div class="col-6 col-xl-3" data-live-stat="emergencies_today">
+    {% include "partials/_stat_card.html" with label="Emergencies today" value=emergencies_today icon="bi-exclamation-octagon-fill" tone="red" hint="since midnight" %}
+  </div>
+  <div class="col-6 col-xl-3" data-live-stat="unacknowledged">
+    {% include "partials/_stat_card.html" with label="Unacknowledged" value=unacknowledged icon="bi-bell-fill" tone="amber" hint="waiting for a reply" %}
+  </div>
+</section>
+
+<div class="row g-4">
+  <section class="col-xl-8" id="patients" aria-labelledby="patients-heading">
+    <div class="section-header">
+      <h2 class="section-title" id="patients-heading">My patients</h2>
+      <div class="d-flex flex-wrap gap-2 align-items-center">
+      {% if patients %}
+        <div class="search-box">
+          <i class="bi bi-search" aria-hidden="true"></i>
+          <label for="patient-search" class="visually-hidden">Search patients</label>
+          <input type="search" id="patient-search" class="form-control" placeholder="Search patients"
+                 data-filter-input="#patient-grid" data-filter-empty="#patient-no-match">
+        </div>
+      {% endif %}
+        <a class="btn btn-primary" href="{% url 'board:patient_add' %}"><i class="bi bi-person-plus" aria-hidden="true"></i> Add patient</a>
+      </div>
+    </div>
+
+    {% if patients %}
+      <div class="row g-3" id="patient-grid">
+        {% for patient in patients %}
+          <div class="col-md-6" data-filter-text="{{ patient.name|lower }} {{ patient.get_condition_type_display|lower }}">
+            {% include "partials/_patient_card.html" %}
+          </div>
+        {% endfor %}
+      </div>
+      <div id="patient-no-match" hidden>
+        {% include "partials/_empty_state.html" with icon="bi-search" title="No matching patients" text="Try a different name or condition." extra_class="card-soft" %}
+      </div>
+    {% else %}
+      <div class="empty-state card-soft">
+        <span class="empty-icon"><i class="bi bi-person-plus" aria-hidden="true"></i></span>
+        <p class="empty-title">No patients yet</p>
+        <p class="empty-text mb-3">Add the person you care for, then connect their gaze app with a one-time code.</p>
+        <a class="btn btn-primary" href="{% url 'board:patient_add' %}"><i class="bi bi-person-plus" aria-hidden="true"></i> Add patient</a>
+      </div>
+    {% endif %}
+  </section>
+
+  <section class="col-xl-4" id="alerts" aria-labelledby="alerts-heading">
+    <div class="card-soft">
+      <div class="section-header mb-2">
+        <h2 class="section-title" id="alerts-heading">Open alerts</h2>
+        <span class="badge badge-soft badge-soft-red" data-live-open-alerts data-live-hide-zero {% if not unacknowledged %}hidden{% endif %}>{{ unacknowledged }}</span>
+      </div>
+      <div data-live-alerts-list aria-live="polite">
+        {% include "partials/_alerts_list.html" %}
+      </div>
+    </div>
+  </section>
+</div>
+
+</div>
+{% endblock %}

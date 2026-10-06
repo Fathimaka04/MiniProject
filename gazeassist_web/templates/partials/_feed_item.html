@@ -1,0 +1,39 @@
+{% load board_extras %}{% comment %}
+  One timeline entry. Use inside <ol class="feed">.
+  Expects `item` (a Request). Pass show_patient=True to show the patient name.
+{% endcomment %}
+<li class="feed-item {% if item.is_emergency %}is-emergency{% elif item.pain_level is not None %}is-pain{% endif %}" data-request-id="{{ item.pk }}">
+  <span class="feed-icon" aria-hidden="true">
+    <i class="bi {% if item.is_emergency %}bi-exclamation-octagon-fill{% elif item.pain_level is not None %}bi-thermometer-half{% else %}bi-chat-left-text-fill{% endif %}"></i>
+  </span>
+  <div class="feed-body">
+    <div class="feed-head">
+      <p class="feed-title">
+        {% if item.is_emergency %}<span class="visually-hidden">Emergency: </span>{% endif %}{{ item.phrase }}
+      </p>
+      <time class="feed-time" datetime="{{ item.timestamp|date:'c' }}" title="{{ item.timestamp|date:'j M Y, H:i' }}">
+        {{ item.timestamp|date:"j M, H:i" }}
+      </time>
+    </div>
+    <p class="feed-meta">
+      {% if show_patient %}<strong>{{ item.patient.name }}</strong> · {% endif %}
+      {% if item.acknowledged_at %}
+        <i class="bi bi-check2-circle" aria-hidden="true"></i> Acknowledged{% if item.acknowledged_by %} by {{ item.acknowledged_by.display_name }}{% endif %}
+      {% elif item.is_emergency %}
+        <span class="text-alert fw-semibold">Waiting for acknowledgement · {{ item.timestamp|ago }}</span>
+      {% else %}
+        Request · not seen yet
+      {% endif %}
+    </p>
+    {% if not item.acknowledged_at %}
+      <form method="post" action="{% url 'board:request_ack' item.pk %}" class="feed-ack" data-ack-form>
+        {% csrf_token %}
+        {% if item.is_emergency %}
+          <button type="submit" class="btn btn-ack"><i class="bi bi-check2-circle" aria-hidden="true"></i> Acknowledge<span class="visually-hidden">: {{ item.phrase }}</span></button>
+        {% else %}
+          <button type="submit" class="btn btn-sm btn-light-soft"><i class="bi bi-eye" aria-hidden="true"></i> Mark as seen<span class="visually-hidden">: {{ item.phrase }}</span></button>
+        {% endif %}
+      </form>
+    {% endif %}
+  </div>
+</li>

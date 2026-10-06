@@ -136,7 +136,8 @@ class CaregiverLinkTests(unittest.TestCase):
         link.start()
         link.submit_request("I am thirsty")
         self.pump(lambda: self.statuses)
-        self.assertEqual(self.statuses[0], (False, "Caregiver board: not set up"))
+        self.assertIs(self.statuses[0][0], False)
+        self.assertIn("Ctrl+Shift+P", self.statuses[0][1])   # tells the caregiver how to connect
         self.assertIsNone(link._thread)
         link.stop()
 

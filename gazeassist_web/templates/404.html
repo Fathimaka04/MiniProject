@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Not found{% endblock %}
+{% block page_title %}Not found{% endblock %}
+{% block content %}
+<div class="card-soft confirm-card mx-auto text-center p-4 p-md-5">
+  <span class="modal-icon"><i class="bi bi-signpost-split" aria-hidden="true"></i></span>
+  <h2 class="h4 fw-bold mb-2">Page not found</h2>
+  <p class="text-body-secondary mb-4">This page doesn't exist, or it belongs to a patient you are not linked to.</p>
+  <a class="btn btn-primary btn-lg" href="{% url 'board:dashboard' %}"><i class="bi bi-house" aria-hidden="true"></i> Back to dashboard</a>
+</div>
+{% endblock %}

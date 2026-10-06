@@ -1,0 +1,21 @@
+{% load board_extras %}
+{% if is_paginated %}
+<nav class="d-flex flex-wrap align-items-center justify-content-between gap-2 mt-3" aria-label="Pagination">
+  <span class="small text-body-secondary">
+    Showing {{ page_obj.start_index }}–{{ page_obj.end_index }} of {{ paginator.count }}
+  </span>
+  <ul class="pagination pagination-soft mb-0">
+    {% if page_obj.has_previous %}
+      <li class="page-item"><a class="page-link" href="{% url_replace page=page_obj.previous_page_number %}" aria-label="Previous page"><i class="bi bi-chevron-left" aria-hidden="true"></i></a></li>
+    {% else %}
+      <li class="page-item disabled"><span class="page-link" aria-hidden="true"><i class="bi bi-chevron-left"></i></span></li>
+    {% endif %}
+    <li class="page-item active" aria-current="page"><span class="page-link">{{ page_obj.number }} / {{ paginator.num_pages }}</span></li>
+    {% if page_obj.has_next %}
+      <li class="page-item"><a class="page-link" href="{% url_replace page=page_obj.next_page_number %}" aria-label="Next page"><i class="bi bi-chevron-right" aria-hidden="true"></i></a></li>
+    {% else %}
+      <li class="page-item disabled"><span class="page-link" aria-hidden="true"><i class="bi bi-chevron-right"></i></span></li>
+    {% endif %}
+  </ul>
+</nav>
+{% endif %}

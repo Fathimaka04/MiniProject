@@ -1,0 +1,13 @@
+{% comment %}
+  Summary card. Usage:
+  {% include "partials/_stat_card.html" with label="Patients" value=3 icon="bi-people-fill" tone="blue" hint="linked to you" %}
+  tone: blue | teal | red | amber
+{% endcomment %}
+<div class="stat-card stat-{{ tone|default:'blue' }}">
+  <span class="stat-icon"><i class="bi {{ icon }}" aria-hidden="true"></i></span>
+  <div class="min-w-0">
+    <p class="stat-label">{{ label }}</p>
+    <p class="stat-value">{{ value }}</p>
+    {% if hint %}<p class="stat-hint">{{ hint }}</p>{% endif %}
+  </div>
+</div>
